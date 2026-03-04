@@ -42,9 +42,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ragwatch/ragwatch"
-Repository = "https://github.com/ragwatch/ragwatch"
-Issues = "https://github.com/ragwatch/ragwatch/issues"
+Homepage = "https://github.com/soumendrak/ragwatch"
+Repository = "https://github.com/soumendrak/ragwatch"
+Issues = "https://github.com/soumendrak/ragwatch/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ragwatch"]
