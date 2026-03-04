@@ -2,7 +2,8 @@
 
 Run::
 
-    pip install ragwatch[langgraph]
+    uv add ragwatch --extra langgraph  # recommended
+    # or: pip install ragwatch[langgraph]
     python examples/langgraph_agent.py
 
 This example demonstrates how to decorate LangGraph-style nodes and

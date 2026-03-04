@@ -2,7 +2,8 @@
 
 Run::
 
-    pip install ragwatch[crewai]
+    uv add ragwatch --extra crewai  # recommended
+    # or: pip install ragwatch[crewai]
     python examples/crewai_agent.py
 
 This example demonstrates how to decorate CrewAI-style agents and

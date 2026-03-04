@@ -12,7 +12,7 @@
 - **RAG Types**: Linear RAG (v0.1), multi-stage via composed decorators
 - **Efficiency**: ~1-5 ms overhead per request
 - **Scope**: SDK only. Users bring their own OTel backend.
-- **Install**: `pip install ragwatch` (core) or `pip install ragwatch[langgraph]`
+- **Install**: `uv add ragwatch` (recommended) or `pip install ragwatch` (core); `uv add ragwatch --extra langgraph` or `pip install ragwatch[langgraph]`
 
 ## Architecture
 

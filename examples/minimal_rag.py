@@ -2,7 +2,8 @@
 
 Run::
 
-    pip install ragwatch
+    uv add ragwatch  # recommended
+    # or: pip install ragwatch
     python examples/minimal_rag.py
 
 Traces appear in your configured OTel backend (e.g. Jaeger at http://localhost:16686).
