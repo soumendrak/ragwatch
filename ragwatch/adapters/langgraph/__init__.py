@@ -2,9 +2,9 @@
 
 Usage::
 
-    from ragwatch.adapters.langgraph import node, workflow
+    from ragwatch.adapters.langgraph import node, workflow, tool
 """
 
-from ragwatch.adapters.langgraph.decorators import node, workflow
+from ragwatch.adapters.langgraph.decorators import node, tool, workflow
 
-__all__ = ["node", "workflow"]
+__all__ = ["node", "workflow", "tool"]
