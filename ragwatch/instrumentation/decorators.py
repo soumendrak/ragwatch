@@ -16,7 +16,12 @@ from ragwatch.core.span_kinds import SpanKind
 from ragwatch.core.tracer import get_tracer
 from ragwatch.instrumentation.embedding import store_embedding_in_context
 from ragwatch.instrumentation.io_tracker import track_input, track_output
-from ragwatch.instrumentation.semconv import OPENINFERENCE_SPAN_KIND
+from ragwatch.instrumentation.semconv import (
+    LLM_TOKEN_COUNT_COMPLETION,
+    LLM_TOKEN_COUNT_PROMPT,
+    LLM_TOKEN_COUNT_TOTAL,
+    OPENINFERENCE_SPAN_KIND,
+)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -109,6 +114,7 @@ def _make_wrapper(
                 if auto_track_io:
                     track_output(span, result)
                 _handle_embedding_context(span_kind, result)
+                _extract_token_usage(span, result)
                 return result
 
         return async_wrapper  # type: ignore[return-value]
@@ -129,6 +135,7 @@ def _make_wrapper(
             if auto_track_io:
                 track_output(span, result)
             _handle_embedding_context(span_kind, result)
+            _extract_token_usage(span, result)
             return result
 
     return sync_wrapper  # type: ignore[return-value]
@@ -138,3 +145,45 @@ def _handle_embedding_context(span_kind: SpanKind, result: Any) -> None:
     """If this is an EMBEDDING span, store the result in OTel context."""
     if span_kind is SpanKind.EMBEDDING:
         store_embedding_in_context(result)
+
+
+def _extract_token_usage(span: Any, result: Any) -> None:
+    """Scan *result* for LangChain AIMessage.usage_metadata and set token
+    count attributes on *span*.
+
+    LangChain nodes return dicts like ``{"messages": [AIMessage(...)]}``.
+    ``AIMessage.usage_metadata`` is a plain dict::
+
+        {"input_tokens": 379, "output_tokens": 45, "total_tokens": 424}
+
+    Duck-typed so RAGWatch stays framework-agnostic (no LangChain import).
+    """
+    if not span.is_recording():
+        return
+
+    candidates: list = []
+    if isinstance(result, dict):
+        for v in result.values():
+            if isinstance(v, list):
+                candidates.extend(v)
+            else:
+                candidates.append(v)
+    elif isinstance(result, list):
+        candidates = result
+    else:
+        candidates = [result]
+
+    prompt_tokens = completion_tokens = total_tokens = 0
+    found = False
+    for obj in candidates:
+        usage = getattr(obj, "usage_metadata", None)
+        if isinstance(usage, dict):
+            found = True
+            prompt_tokens     += usage.get("input_tokens", 0)
+            completion_tokens += usage.get("output_tokens", 0)
+            total_tokens      += usage.get("total_tokens", 0)
+
+    if found:
+        span.set_attribute(LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
+        span.set_attribute(LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
+        span.set_attribute(LLM_TOKEN_COUNT_TOTAL, total_tokens)

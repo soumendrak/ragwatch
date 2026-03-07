@@ -13,7 +13,7 @@ from ragwatch.core.config import RAGWatchConfig
 from ragwatch.instrumentation.semconv import RAGWATCH_SDK_VERSION
 
 _TRACER_PROVIDER: Optional[TracerProvider] = None
-_SDK_VERSION = "0.1.2"
+_SDK_VERSION = "0.1.3"
 _INSTRUMENTATION_NAME = "ragwatch"
 
 

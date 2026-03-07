@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ragwatch"
-version = "0.1.2"
+version = "0.1.3"
 description = "OpenTelemetry-native RAG observability SDK with semantic quality scores"
 readme = "README.md"
 license = {text = "MIT"}
@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "opentelemetry-api>=1.24.0",
     "opentelemetry-sdk>=1.24.0",
+    "openinference-semantic-conventions>=0.1.9",
 ]
 
 [project.optional-dependencies]
