@@ -13,7 +13,7 @@ from ragwatch.core.config import RAGWatchConfig
 from ragwatch.instrumentation.semconv import RAGWATCH_SDK_VERSION
 
 _TRACER_PROVIDER: Optional[TracerProvider] = None
-_SDK_VERSION = "0.1.0"
+_SDK_VERSION = "0.1.2"
 _INSTRUMENTATION_NAME = "ragwatch"
 
 
@@ -44,11 +44,12 @@ def configure_tracer(
 
     provider = TracerProvider(resource=resource)
 
-    if config.exporter is not None:
-        if _force_flush:
-            processor = SimpleSpanProcessor(config.exporter)
-        else:
-            processor = BatchSpanProcessor(config.exporter)
+    # Collect all exporters: prefer the new list API, fall back to legacy single
+    all_exporters = list(config.exporters) or (
+        [config.exporter] if config.exporter is not None else []
+    )
+    for exp in all_exporters:
+        processor = SimpleSpanProcessor(exp) if _force_flush else BatchSpanProcessor(exp)
         provider.add_span_processor(processor)
 
     try:
