@@ -12,6 +12,7 @@ from typing import Any
 
 from opentelemetry import trace as otel_trace
 
+from ragwatch.instrumentation.attributes import safe_set_attribute
 from ragwatch.instrumentation.semconv import INPUT_VALUE, OUTPUT_VALUE
 
 _MAX_IO_BYTES = 4096
@@ -41,7 +42,7 @@ def track_input(span: otel_trace.Span, args: tuple, kwargs: dict) -> None:
         payload["args"] = list(args)
     if kwargs:
         payload["kwargs"] = kwargs
-    span.set_attribute(INPUT_VALUE, _safe_serialize(payload))
+    safe_set_attribute(span, INPUT_VALUE, _safe_serialize(payload))
 
 
 def track_output(span: otel_trace.Span, result: Any) -> None:
@@ -51,4 +52,4 @@ def track_output(span: otel_trace.Span, result: Any) -> None:
         span: The active OTel span.
         result: The return value of the decorated function.
     """
-    span.set_attribute(OUTPUT_VALUE, _safe_serialize(result))
+    safe_set_attribute(span, OUTPUT_VALUE, _safe_serialize(result))

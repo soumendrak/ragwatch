@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from opentelemetry import trace as otel_trace
 
+from ragwatch.instrumentation.attributes import safe_set_attribute
 from ragwatch.instrumentation.semconv import (
     RETRIEVAL_CHUNKS_RETURNED,
     RETRIEVAL_TOP_K,
@@ -28,6 +29,6 @@ def set_retrieval_attributes(
         chunks_returned: Number of chunks actually returned.
     """
     if top_k is not None:
-        span.set_attribute(RETRIEVAL_TOP_K, top_k)
+        safe_set_attribute(span, RETRIEVAL_TOP_K, top_k)
     if chunks_returned is not None:
-        span.set_attribute(RETRIEVAL_CHUNKS_RETURNED, chunks_returned)
+        safe_set_attribute(span, RETRIEVAL_CHUNKS_RETURNED, chunks_returned)

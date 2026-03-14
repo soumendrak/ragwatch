@@ -12,6 +12,7 @@ from typing import Any
 from opentelemetry import trace as otel_trace
 
 from ragwatch.core.context import set_query_embedding
+from ragwatch.instrumentation.attributes import safe_set_attribute
 from ragwatch.instrumentation.semconv import (
     EMBEDDING_DIMENSIONS,
     EMBEDDING_DURATION_MS,
@@ -35,11 +36,11 @@ def set_embedding_attributes(
         duration_ms: Time taken to generate the embedding in milliseconds.
     """
     if model_name is not None:
-        span.set_attribute(EMBEDDING_MODEL_NAME, model_name)
+        safe_set_attribute(span, EMBEDDING_MODEL_NAME, model_name)
     if dimensions is not None:
-        span.set_attribute(EMBEDDING_DIMENSIONS, dimensions)
+        safe_set_attribute(span, EMBEDDING_DIMENSIONS, dimensions)
     if duration_ms is not None:
-        span.set_attribute(EMBEDDING_DURATION_MS, duration_ms)
+        safe_set_attribute(span, EMBEDDING_DURATION_MS, duration_ms)
 
 
 def store_embedding_in_context(result: Any) -> None:

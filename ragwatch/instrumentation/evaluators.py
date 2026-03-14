@@ -15,6 +15,7 @@ from opentelemetry import trace as otel_trace
 
 from ragwatch.core.context import get_query_embedding
 from ragwatch.core.tracer import get_tracer
+from ragwatch.instrumentation.attributes import safe_set_attribute
 from ragwatch.instrumentation.semconv import (
     CHUNK_RELEVANCE_SCORE,
     CHUNK_RELEVANCE_SCORES,
@@ -68,8 +69,8 @@ def chunk_relevance_score(
     if span.is_recording():
         if scores:
             avg = sum(scores) / len(scores)
-            span.set_attribute(CHUNK_RELEVANCE_SCORE, avg)
-            span.set_attribute(CHUNK_RELEVANCE_SCORES, scores)
+            safe_set_attribute(span, CHUNK_RELEVANCE_SCORE, avg)
+            safe_set_attribute(span, CHUNK_RELEVANCE_SCORES, scores)
 
     return scores
 
@@ -86,5 +87,5 @@ def record_feedback(trace_id: str, score: float) -> None:
     """
     tracer = get_tracer()
     with tracer.start_as_current_span("ragwatch.feedback") as span:
-        span.set_attribute(USER_FEEDBACK_SCORE, score)
-        span.set_attribute(USER_FEEDBACK_TRACE_ID, trace_id)
+        safe_set_attribute(span, USER_FEEDBACK_SCORE, score)
+        safe_set_attribute(span, USER_FEEDBACK_TRACE_ID, trace_id)

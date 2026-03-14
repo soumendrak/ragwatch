@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, List, Optional, TypeVar
 
 from ragwatch.core.span_kinds import SpanKind
 from ragwatch.instrumentation.decorators import trace
+from ragwatch.instrumentation.span_hooks import SpanHook
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -19,6 +20,7 @@ def node(
     *,
     span_name: str | None = None,
     auto_track_io: bool = True,
+    span_hooks: Optional[List[SpanHook]] = None,
 ) -> F | Callable[[F], F]:
     """Decorate a CrewAI agent function with ``SpanKind.AGENT``.
 
@@ -36,7 +38,8 @@ def node(
         auto_track_io: Whether to auto-capture input/output.
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.AGENT, auto_track_io=auto_track_io)
+        return trace(func, span_kind=SpanKind.AGENT, auto_track_io=auto_track_io,
+                     span_hooks=span_hooks, adapter="crewai")
 
     actual_span_name = func if isinstance(func, str) else span_name
 
@@ -45,6 +48,8 @@ def node(
             actual_span_name,
             span_kind=SpanKind.AGENT,
             auto_track_io=auto_track_io,
+            span_hooks=span_hooks,
+            adapter="crewai",
         )(fn)
 
     return decorator  # type: ignore[return-value]
@@ -55,6 +60,7 @@ def endpoint(
     *,
     span_name: str | None = None,
     auto_track_io: bool = True,
+    span_hooks: Optional[List[SpanHook]] = None,
 ) -> F | Callable[[F], F]:
     """Decorate a CrewAI endpoint with ``SpanKind.CHAIN``.
 
@@ -72,7 +78,8 @@ def endpoint(
         auto_track_io: Whether to auto-capture input/output.
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.CHAIN, auto_track_io=auto_track_io)
+        return trace(func, span_kind=SpanKind.CHAIN, auto_track_io=auto_track_io,
+                     span_hooks=span_hooks, adapter="crewai")
 
     actual_span_name = func if isinstance(func, str) else span_name
 
@@ -81,6 +88,8 @@ def endpoint(
             actual_span_name,
             span_kind=SpanKind.CHAIN,
             auto_track_io=auto_track_io,
+            span_hooks=span_hooks,
+            adapter="crewai",
         )(fn)
 
     return decorator  # type: ignore[return-value]

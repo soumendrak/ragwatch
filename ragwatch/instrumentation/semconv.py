@@ -3,19 +3,35 @@
 Standard OpenInference attributes are imported directly from
 ``openinference-semantic-conventions`` so RAGWatch stays in sync with the
 official spec.  Only RAGWatch-specific attributes are defined here.
+
+Stability tiers
+~~~~~~~~~~~~~~~~
+- **OpenInference standard** — upstream spec, never changes within a semconv
+  version.
+- **RAGWatch stable** — committed API; changes are backward-compatible and
+  versioned.
+- **RAGWatch experimental** — may change or be removed without notice; used
+  for fast iteration on new telemetry concepts.
 """
 
 from openinference.semconv.trace import SpanAttributes
 
 SEMCONV_VERSION = "v1.40"
 
-# --- OpenInference standard attributes (re-exported for convenience) ---------
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tier 1 — OpenInference standard attributes (re-exported for convenience)
+# ═══════════════════════════════════════════════════════════════════════════════
 OPENINFERENCE_SPAN_KIND    = SpanAttributes.OPENINFERENCE_SPAN_KIND
 LLM_TOKEN_COUNT_PROMPT     = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
 LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
 LLM_TOKEN_COUNT_TOTAL      = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
 INPUT_VALUE                = SpanAttributes.INPUT_VALUE
 OUTPUT_VALUE               = SpanAttributes.OUTPUT_VALUE
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tier 2 — RAGWatch stable attributes
+#   Dashboard-safe; part of the public contract.
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # --- Embedding stage -------------------------
 EMBEDDING_MODEL_NAME = "embedding.model.name"
@@ -60,6 +76,19 @@ ROUTING_FROM_NODE         = "routing.from_node"
 ROUTING_TO_NODE           = "routing.to_node"
 ROUTING_REASON            = "routing.reason"
 
+# --- Response / feedback ---------------------
+RESPONSE_LENGTH = "response.length"
+USER_FEEDBACK_SCORE = "user.feedback_score"
+USER_FEEDBACK_TRACE_ID = "user.feedback_trace_id"
+
+# --- RAGWatch metadata -----------------------
+RAGWATCH_SDK_VERSION = "ragwatch.sdk.version"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tier 3 — RAGWatch experimental attributes
+#   May change or be removed without notice.
+# ═══════════════════════════════════════════════════════════════════════════════
+
 # --- Context compression ---------------------
 # Set via helpers.record_context_compression()
 COMPRESSION_TOKENS_BEFORE     = "context.compression.tokens_before"
@@ -75,11 +104,3 @@ QUERY_ORIGINAL            = "query.original"
 QUERY_REWRITTEN_COUNT     = "query.rewritten_count"
 QUERY_REWRITTEN_QUESTIONS = "query.rewritten_questions"    # list[str]
 QUERY_IS_CLEAR            = "query.is_clear"
-
-# --- Response / feedback ---------------------
-RESPONSE_LENGTH = "response.length"
-USER_FEEDBACK_SCORE = "user.feedback_score"
-USER_FEEDBACK_TRACE_ID = "user.feedback_trace_id"
-
-# --- RAGWatch metadata -----------------------
-RAGWATCH_SDK_VERSION = "ragwatch.sdk.version"

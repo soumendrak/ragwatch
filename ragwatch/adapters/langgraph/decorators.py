@@ -15,6 +15,7 @@ from typing import Any, Callable, List, Optional, TypeVar
 
 from ragwatch.core.span_kinds import SpanKind
 from ragwatch.instrumentation.decorators import trace
+from ragwatch.instrumentation.span_hooks import SpanHook
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -26,6 +27,7 @@ def node(
     auto_track_io: bool = True,
     telemetry: Optional[List[str]] = None,
     result_formatter: Optional[Callable] = None,
+    span_hooks: Optional[List[SpanHook]] = None,
 ) -> F | Callable[[F], F]:
     """Decorate a LangGraph node with ``SpanKind.AGENT``.
 
@@ -48,14 +50,16 @@ def node(
     """
     if callable(func):
         return trace(func, span_kind=SpanKind.AGENT, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter)
+                     telemetry=telemetry, result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
         return trace(actual_name, span_kind=SpanKind.AGENT,
                      auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter)(fn)
+                     result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")(fn)
 
     return decorator  # type: ignore[return-value]
 
@@ -67,18 +71,21 @@ def workflow(
     auto_track_io: bool = True,
     telemetry: Optional[List[str]] = None,
     result_formatter: Optional[Callable] = None,
+    span_hooks: Optional[List[SpanHook]] = None,
 ) -> F | Callable[[F], F]:
     """Decorate a LangGraph workflow with ``SpanKind.CHAIN``."""
     if callable(func):
         return trace(func, span_kind=SpanKind.CHAIN, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter)
+                     telemetry=telemetry, result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
         return trace(actual_name, span_kind=SpanKind.CHAIN,
                      auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter)(fn)
+                     result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")(fn)
 
     return decorator  # type: ignore[return-value]
 
@@ -90,6 +97,7 @@ def tool(
     auto_track_io: bool = True,
     telemetry: Optional[List[str]] = None,
     result_formatter: Optional[Callable] = None,
+    span_hooks: Optional[List[SpanHook]] = None,
 ) -> F | Callable[[F], F]:
     """Decorate a LangGraph tool implementation with ``SpanKind.TOOL``.
 
@@ -104,13 +112,15 @@ def tool(
     """
     if callable(func):
         return trace(func, span_kind=SpanKind.TOOL, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter)
+                     telemetry=telemetry, result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
         return trace(actual_name, span_kind=SpanKind.TOOL,
                      auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter)(fn)
+                     result_formatter=result_formatter,
+                     span_hooks=span_hooks, adapter="langgraph")(fn)
 
     return decorator  # type: ignore[return-value]

@@ -17,6 +17,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from opentelemetry import trace as otel_trace
 
+from ragwatch.instrumentation.attributes import safe_set_attribute
 from ragwatch.instrumentation.semconv import (
     AGENT_ANSWER_LENGTH,
     AGENT_COMPLETION_STATUS,
@@ -104,16 +105,16 @@ def record_chunks(
     scores = [float(score) for _, score in results]
 
     # --- Aggregate stats ---------------------------------------------------
-    sp.set_attribute(CHUNK_COUNT, len(results))
-    sp.set_attribute(CHUNK_RELEVANCE_SCORES, scores)       # legacy array
+    safe_set_attribute(sp, CHUNK_COUNT, len(results))
+    safe_set_attribute(sp, CHUNK_RELEVANCE_SCORES, scores)       # legacy array
     avg = sum(scores) / len(scores)
-    sp.set_attribute(CHUNK_RELEVANCE_SCORE, round(avg, 4))  # legacy scalar
-    sp.set_attribute(CHUNK_AVG_SCORE, round(avg, 4))
-    sp.set_attribute(CHUNK_MIN_SCORE, round(min(scores), 4))
-    sp.set_attribute(CHUNK_MAX_SCORE, round(max(scores), 4))
+    safe_set_attribute(sp, CHUNK_RELEVANCE_SCORE, round(avg, 4))  # legacy scalar
+    safe_set_attribute(sp, CHUNK_AVG_SCORE, round(avg, 4))
+    safe_set_attribute(sp, CHUNK_MIN_SCORE, round(min(scores), 4))
+    safe_set_attribute(sp, CHUNK_MAX_SCORE, round(max(scores), 4))
 
     if query:
-        sp.set_attribute(CHUNK_QUERY, query)
+        safe_set_attribute(sp, CHUNK_QUERY, query)
 
     # --- Per-chunk attributes ----------------------------------------------
     for i, (doc, score) in enumerate(results):
@@ -125,11 +126,11 @@ def record_chunks(
 
         metadata = getattr(doc, "metadata", {}) or {}
 
-        sp.set_attribute(f"{pfx}.content",   content)
-        sp.set_attribute(f"{pfx}.score",     round(float(score), 4))
-        sp.set_attribute(f"{pfx}.source",    str(metadata.get("source", "")))
-        sp.set_attribute(f"{pfx}.parent_id", str(metadata.get("parent_id", "")))
-        sp.set_attribute(f"{pfx}.char_count", len(getattr(doc, "page_content", "") or ""))
+        safe_set_attribute(sp, f"{pfx}.content",   content)
+        safe_set_attribute(sp, f"{pfx}.score",     round(float(score), 4))
+        safe_set_attribute(sp, f"{pfx}.source",    str(metadata.get("source", "")))
+        safe_set_attribute(sp, f"{pfx}.parent_id", str(metadata.get("parent_id", "")))
+        safe_set_attribute(sp, f"{pfx}.char_count", len(getattr(doc, "page_content", "") or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -177,17 +178,17 @@ def record_agent_completion(
     if not sp.is_recording():
         return
 
-    sp.set_attribute(AGENT_COMPLETION_STATUS, status)
-    sp.set_attribute(AGENT_ITERATION_COUNT, iteration_count)
-    sp.set_attribute(AGENT_TOOL_CALL_COUNT, tool_call_count)
-    sp.set_attribute(AGENT_IS_FALLBACK, is_fallback)
+    safe_set_attribute(sp, AGENT_COMPLETION_STATUS, status)
+    safe_set_attribute(sp, AGENT_ITERATION_COUNT, iteration_count)
+    safe_set_attribute(sp, AGENT_TOOL_CALL_COUNT, tool_call_count)
+    safe_set_attribute(sp, AGENT_IS_FALLBACK, is_fallback)
 
     if question:
-        sp.set_attribute(AGENT_QUESTION, question)
+        safe_set_attribute(sp, AGENT_QUESTION, question)
     if question_index:
-        sp.set_attribute(AGENT_QUESTION_INDEX, question_index)
+        safe_set_attribute(sp, AGENT_QUESTION_INDEX, question_index)
     if answer_length:
-        sp.set_attribute(AGENT_ANSWER_LENGTH, answer_length)
+        safe_set_attribute(sp, AGENT_ANSWER_LENGTH, answer_length)
 
     # Emit a span event so the timeline shows the completion point clearly
     sp.add_event(
@@ -236,10 +237,10 @@ def record_routing(
     if not sp.is_recording():
         return
 
-    sp.set_attribute(ROUTING_FROM_NODE, from_node)
-    sp.set_attribute(ROUTING_TO_NODE, to_node)
+    safe_set_attribute(sp, ROUTING_FROM_NODE, from_node)
+    safe_set_attribute(sp, ROUTING_TO_NODE, to_node)
     if reason:
-        sp.set_attribute(ROUTING_REASON, reason)
+        safe_set_attribute(sp, ROUTING_REASON, reason)
 
     sp.add_event(
         "routing.decision",
@@ -287,14 +288,14 @@ def record_tool_calls(
         return
 
     tool_names: List[str] = [tc.get("name", "") for tc in tool_calls]
-    sp.set_attribute(LLM_TOOL_CALLS_COUNT, len(tool_calls))
-    sp.set_attribute(LLM_TOOL_CALLS_NAMES, tool_names)
+    safe_set_attribute(sp, LLM_TOOL_CALLS_COUNT, len(tool_calls))
+    safe_set_attribute(sp, LLM_TOOL_CALLS_NAMES, tool_names)
 
     for i, tc in enumerate(tool_calls):
         pfx = f"{LLM_TOOL_CALL_PREFIX}.{i}"
-        sp.set_attribute(f"{pfx}.name", tc.get("name", ""))
-        sp.set_attribute(f"{pfx}.args", str(tc.get("args", {})))
-        sp.set_attribute(f"{pfx}.id",   str(tc.get("id", "")))
+        safe_set_attribute(sp, f"{pfx}.name", tc.get("name", ""))
+        safe_set_attribute(sp, f"{pfx}.args", str(tc.get("args", {})))
+        safe_set_attribute(sp, f"{pfx}.id",   str(tc.get("id", "")))
 
     sp.add_event(
         "llm.tool_calls_decided",
@@ -344,21 +345,21 @@ def record_context_compression(
     if not sp.is_recording():
         return
 
-    sp.set_attribute(COMPRESSION_TOKENS_BEFORE, tokens_before)
+    safe_set_attribute(sp, COMPRESSION_TOKENS_BEFORE, tokens_before)
 
     if tokens_after:
-        sp.set_attribute(COMPRESSION_TOKENS_AFTER, tokens_after)
+        safe_set_attribute(sp, COMPRESSION_TOKENS_AFTER, tokens_after)
         if tokens_before > 0:
             ratio = round(tokens_after / tokens_before, 3)
-            sp.set_attribute(COMPRESSION_RATIO, ratio)
+            safe_set_attribute(sp, COMPRESSION_RATIO, ratio)
 
     if queries_run:
-        sp.set_attribute(COMPRESSION_QUERIES_RUN, queries_run)
-        sp.set_attribute(COMPRESSION_UNIQUE_QUERIES, len(queries_run))
+        safe_set_attribute(sp, COMPRESSION_QUERIES_RUN, queries_run)
+        safe_set_attribute(sp, COMPRESSION_UNIQUE_QUERIES, len(queries_run))
 
     if parents_retrieved:
-        sp.set_attribute(COMPRESSION_PARENTS_RETRIEVED, parents_retrieved)
-        sp.set_attribute(COMPRESSION_UNIQUE_PARENTS, len(parents_retrieved))
+        safe_set_attribute(sp, COMPRESSION_PARENTS_RETRIEVED, parents_retrieved)
+        safe_set_attribute(sp, COMPRESSION_UNIQUE_PARENTS, len(parents_retrieved))
 
     sp.add_event(
         "context.compressed",
@@ -403,10 +404,10 @@ def record_query_rewrite(
     if not sp.is_recording():
         return
 
-    sp.set_attribute(QUERY_ORIGINAL, original_query[:1000])
-    sp.set_attribute(QUERY_REWRITTEN_COUNT, len(rewritten_questions))
-    sp.set_attribute(QUERY_REWRITTEN_QUESTIONS, rewritten_questions)
-    sp.set_attribute(QUERY_IS_CLEAR, is_clear)
+    safe_set_attribute(sp, QUERY_ORIGINAL, original_query[:1000])
+    safe_set_attribute(sp, QUERY_REWRITTEN_COUNT, len(rewritten_questions))
+    safe_set_attribute(sp, QUERY_REWRITTEN_QUESTIONS, rewritten_questions)
+    safe_set_attribute(sp, QUERY_IS_CLEAR, is_clear)
 
     sp.add_event(
         "query.rewritten",
