@@ -1,0 +1,72 @@
+name: Publish to PyPI
+
+on:
+  push:
+    branches: [ release ]
+    tags:
+    - 'v*' # Also trigger on version tags as fallback
+  workflow_run:
+    workflows: [ "Bump Version on Release Branch" ]
+    types:
+    - completed
+    branches: [ release ]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for trusted publishing
+      contents: write # Required for creating tags
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Need full history for version detection
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build hatchling
+
+    - name: Get current version
+      id: get_version
+      run: |
+        # Extract version from pyproject.toml
+        VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "Current version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Check if tag exists
+      id: check_tag
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+          echo "Tag v$VERSION already exists. Skipping publish."
+          echo "should_publish=false" >> $GITHUB_OUTPUT
+        else
+          echo "Tag v$VERSION does not exist. Will publish."
+          echo "should_publish=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build package
+      if: steps.check_tag.outputs.should_publish == 'true'
+      run: python -m build
+
+    - name: Create Git tag
+      if: steps.check_tag.outputs.should_publish == 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release v${{ steps.get_version.outputs.version }}"
+        git push origin "v${{ steps.get_version.outputs.version }}"
+
+    - name: Publish to PyPI (trusted publishing)
+      if: steps.check_tag.outputs.should_publish == 'true'
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        print-hash: true
