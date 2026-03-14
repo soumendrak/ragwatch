@@ -1,18 +1,25 @@
 [build-system]
-requires = ["hatchling"]
+requires = [
+    "hatchling",
+]
 build-backend = "hatchling.build"
 
 [project]
 name = "ragwatch"
-version = "0.1.7"
+version = "0.2.0"
 description = "OpenTelemetry-native RAG observability SDK with semantic quality scores"
 readme = "README.md"
-license = {text = "MIT"}
 requires-python = ">=3.11,<3.14"
 authors = [
-    {name = "RAGWatch Contributors"},
+    { name = "RAGWatch Contributors" },
 ]
-keywords = ["opentelemetry", "rag", "observability", "tracing", "llm"]
+keywords = [
+    "opentelemetry",
+    "rag",
+    "observability",
+    "tracing",
+    "llm",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -28,6 +35,9 @@ dependencies = [
     "opentelemetry-sdk==1.24.0",
     "openinference-semantic-conventions==0.1.9",
 ]
+
+[project.license]
+text = "MIT"
 
 [project.optional-dependencies]
 langgraph = [
@@ -48,7 +58,9 @@ Repository = "https://github.com/soumendrak/ragwatch"
 Issues = "https://github.com/soumendrak/ragwatch/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ragwatch"]
+packages = [
+    "ragwatch",
+]
 
 [tool.uv]
 python-preference = "only-managed"
@@ -56,13 +68,15 @@ python-preference = "only-managed"
 [tool.uv.pip]
 extra-index-url = []
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = [
+    "tests",
+]
+
 [dependency-groups]
 dev = [
     "pytest==8.0",
     "pytest-asyncio==0.23",
     "ruff==0.6.0",
 ]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
