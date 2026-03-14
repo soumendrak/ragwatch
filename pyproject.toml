@@ -38,7 +38,7 @@ crewai = [
 ]
 dev = [
     "pytest==8.0",
-    "pytest-asyncio==0.23",
+    "pytest-asyncio>=0.23.5",
     "ruff==0.6.0",
 ]
 
@@ -59,7 +59,7 @@ extra-index-url = []
 [dependency-groups]
 dev = [
     "pytest==8.0",
-    "pytest-asyncio==0.23",
+    "pytest-asyncio>=0.23.5",
     "ruff==0.6.0",
 ]
 
