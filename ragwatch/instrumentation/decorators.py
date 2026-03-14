@@ -31,6 +31,25 @@ from ragwatch.instrumentation.token_usage import extract_token_usage
 _logger = logging.getLogger(__name__)
 
 
+def _safe_normalize(ctx: InstrumentationContext) -> Any:
+    """Call adapter.normalize_result() with failure isolation.
+
+    Matches the same three-step pattern used by ``_safe_transform`` and
+    ``_safe_extract_tokens``: log warning → span event → strict re-raise.
+    """
+    if ctx.adapter is None:
+        return None
+    try:
+        from ragwatch.adapters.base import normalize_result
+        return normalize_result(ctx.adapter, ctx.raw_result, ctx.state)
+    except Exception as exc:
+        _logger.warning("Result normalization failed: %s", exc)
+        ctx.span.add_event("ragwatch.normalize_error", {"error": str(exc)})
+        if _is_strict_mode():
+            raise
+        return None
+
+
 def _is_strict_mode() -> bool:
     try:
         from ragwatch import get_active_config
@@ -186,6 +205,7 @@ def _make_wrapper(
                     run_on_error(span, exc, local_hooks=_hooks, context=ctx)
                     raise
                 ctx.raw_result = raw
+                ctx.normalized = _safe_normalize(ctx)
                 # Telemetry on raw result (before any transformation)
                 if _tel:
                     _extract_node_telemetry(ctx, _tel)
@@ -225,6 +245,7 @@ def _make_wrapper(
                 run_on_error(span, exc, local_hooks=_hooks, context=ctx)
                 raise
             ctx.raw_result = raw
+            ctx.normalized = _safe_normalize(ctx)
             # Telemetry on raw result (before any transformation)
             if _tel:
                 _extract_node_telemetry(ctx, _tel)

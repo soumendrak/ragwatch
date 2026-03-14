@@ -39,6 +39,7 @@ from ragwatch.instrumentation.token_usage import (
     register_token_extractor,
     clear_token_extractors,
 )
+from ragwatch.instrumentation.context_model import InstrumentationContext
 from ragwatch.instrumentation.helpers import (
     record_agent_completion,
     record_chunks,
@@ -122,36 +123,36 @@ def configure(config: RAGWatchConfig | None = None, **kwargs) -> None:
 
 
 __all__ = [
+    # --- Stable API -----------------------------------------------------------
+    # Core
     "configure",
     "trace",
-    "record_feedback",
-    "chunk_relevance_score",
     "RAGWatchConfig",
     "SpanKind",
-    # Extractor plugin system
+    "InstrumentationContext",
+    "RAGWatchRuntime",
+    "get_active_config",
+    # Quality scores
+    "record_feedback",
+    "chunk_relevance_score",
+    # Extension protocols (context-first canonical, legacy supported)
     "TelemetryExtractor",
     "ExtractorRegistry",
     "get_default_registry",
-    # Span hooks
     "SpanHook",
     "register_global_hook",
-    # Adapter contracts
     "FrameworkAdapter",
     "register_adapter",
-    # Result transformers
     "ResultTransformer",
     "ResultTransformerRegistry",
     "get_default_transformer_registry",
-    # Token extractors
     "TokenExtractor",
     "register_token_extractor",
-    # Attribute policy
+    # Attribute policy & writer
     "AttributePolicy",
     "validate_attribute_name",
     "safe_set_attribute",
     "safe_set_attributes",
-    "get_active_config",
-    "RAGWatchRuntime",
     # Rich telemetry helpers
     "record_chunks",
     "record_agent_completion",

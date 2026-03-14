@@ -36,6 +36,17 @@ uv add ragwatch --extra crewai
 uv run python examples/crewai_agent.py
 ```
 
+### Custom Extensions (Context-First)
+
+Demonstrates all extension points using the canonical context-first pattern:
+custom extractors, hooks, transformers, token extractors, and `AttributePolicy`.
+
+```bash
+uv run python examples/custom_extensions.py
+```
+
+See also: [Extension Guide](../docs/EXTENSION_GUIDE.md)
+
 ## Viewing Traces
 
 All examples use `ConsoleSpanExporter` by default. To send traces to Jaeger:

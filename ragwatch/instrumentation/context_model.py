@@ -34,6 +34,7 @@ class InstrumentationContext:
     kwargs: dict = field(default_factory=dict)
     adapter: Any = None            # Optional[FrameworkAdapter]
     state: Optional[dict] = None   # adapter.extract_state() result
+    normalized: Optional[dict] = None  # adapter.normalize_result() output
     raw_result: Any = None         # before transformation
     result: Any = None             # after transformation
     exception: Optional[BaseException] = None

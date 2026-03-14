@@ -24,6 +24,18 @@ class RAGWatchRuntime:
     This is a **read-only view** — mutating the runtime is done via
     :func:`ragwatch.configure`.  The runtime simply reads the global
     state that ``configure()`` sets.
+
+    .. note:: **Current limitation (v0.3)**
+
+        ``RAGWatchRuntime`` is a facade over module-level globals, not
+        a true isolated instance.  This means multi-tenant or
+        side-by-side configurations within the same process are not
+        supported.  A future release (v0.4+) plans to support::
+
+            runtime = configure(RAGWatchConfig(...))
+            runtime.trace("my-span", ...)
+
+        with an optional global default for convenience.
     """
 
     @staticmethod

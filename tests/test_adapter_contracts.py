@@ -289,7 +289,7 @@ def test_langgraph_capabilities():
 def test_crewai_capabilities():
     adapter = CrewAIAdapter()
     caps = get_capabilities(adapter)
-    assert "task_completion" in caps
+    assert "agent_completion" in caps
 
 
 def test_custom_adapter_without_capabilities():

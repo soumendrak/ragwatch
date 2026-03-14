@@ -15,11 +15,20 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import re
+import weakref
+from typing import Any, Dict, Optional, Set
 
 from opentelemetry import trace as otel_trace
 
 _logger = logging.getLogger(__name__)
+
+# Pattern to detect indexed attribute keys like retrieval.chunk.42.content
+_INDEXED_ATTR_RE = re.compile(r"^(.+)\.(\d+)\.")
+
+# WeakKeyDict tracking the set of (prefix, index) pairs written per span.
+# Automatically cleaned up when the span is garbage-collected.
+_span_indexed_counts: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def _get_active_policy():
@@ -73,6 +82,27 @@ def safe_set_attribute(
                 span.add_event("ragwatch.invalid_attribute", {"key": key})
                 return
             _logger.warning("Invalid attribute name: %r", key)
+
+        # Indexed attribute explosion guard
+        m = _INDEXED_ATTR_RE.match(key)
+        if m is not None:
+            prefix = m.group(1)
+            idx = int(m.group(2))
+            if idx >= resolved_policy.max_indexed_attributes:
+                _logger.debug(
+                    "Indexed attribute %r exceeds max_indexed_attributes=%d, skipped",
+                    key, resolved_policy.max_indexed_attributes,
+                )
+                # Record event only once per prefix to avoid spam
+                seen: Set = _span_indexed_counts.setdefault(span, set())
+                if prefix not in seen:
+                    seen.add(prefix)
+                    span.add_event("ragwatch.indexed_attr_limit", {
+                        "prefix": prefix,
+                        "limit": resolved_policy.max_indexed_attributes,
+                    })
+                return
+
         value = resolved_policy.apply(key, value)
 
     span.set_attribute(key, value)

@@ -41,6 +41,35 @@ class ResultTransformer(Protocol):
 
     Implementors provide a ``span_kind`` they handle and a ``transform``
     method that converts the raw result into whatever the caller expects.
+
+    Two signatures are supported — the dispatch auto-detects which one
+    your transformer implements.
+
+    **Canonical (context-first — recommended):**
+
+    .. code-block:: python
+
+        class MyTransformer:
+            @property
+            def span_kind(self) -> SpanKind:
+                return SpanKind.TOOL
+
+            def transform(self, context: InstrumentationContext) -> Any:
+                raw = context.raw_result
+                context.set_attribute("custom.key", "val")
+                return str(raw)
+
+    **Legacy (still supported):**
+
+    .. code-block:: python
+
+        class MyTransformer:
+            @property
+            def span_kind(self) -> SpanKind:
+                return SpanKind.TOOL
+
+            def transform(self, span, args, kwargs, result, result_formatter) -> Any:
+                return str(result)
     """
 
     @property
@@ -48,15 +77,8 @@ class ResultTransformer(Protocol):
         """The span kind this transformer handles."""
         ...
 
-    def transform(
-        self,
-        span: Any,
-        args: tuple,
-        kwargs: dict,
-        result: Any,
-        result_formatter: Optional[Callable],
-    ) -> Any:
-        """Transform *result* and optionally record telemetry on *span*."""
+    def transform(self, *args: Any, **kwargs: Any) -> Any:
+        """Transform result — see class docstring for supported signatures."""
         ...
 
 

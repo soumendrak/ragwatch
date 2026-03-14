@@ -30,6 +30,10 @@ from typing import Any, List, Optional
 
 # Dot-separated, lowercase alphanumeric + underscores per segment
 _VALID_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.\d+(\.[a-z][a-z0-9_]*)*)*$")
+
+# Pattern to detect indexed attributes like retrieval.chunk.0.content
+_INDEXED_ATTR_PATTERN = re.compile(r"^(.+)\.(\d+)\.")
+
 _MAX_KEY_LENGTH = 128
 
 
@@ -59,12 +63,17 @@ def validate_attribute_name(name: str) -> bool:
 
 @dataclass
 class AttributePolicy:
-    """Controls truncation and redaction of span attribute values.
+    """Controls truncation, redaction, and cardinality of span attribute values.
 
     Args:
         max_value_bytes: Maximum byte length for string attribute values.
             Values exceeding this are truncated with a ``...[truncated]``
             suffix.  Default: 4096.
+        max_list_length: Maximum number of items in list/tuple attribute
+            values.  Longer sequences are silently truncated.  Default: 128.
+        max_indexed_attributes: Maximum index for indexed attribute families
+            (e.g. ``retrieval.chunk.N.content``).  Writes with index ≥ this
+            limit are skipped and a span event is recorded.  Default: 50.
         redact_patterns: List of regex patterns.  If an attribute **value**
             matches any pattern, it is replaced with ``[REDACTED]``.
             Patterns are applied to string values only.
@@ -72,12 +81,21 @@ class AttributePolicy:
             **name** contains any of these substrings, its value is replaced
             with ``[REDACTED]``.  Useful for blanket PII suppression
             (e.g. ``["password", "secret", "token"]``).
+        redact_io_keys: List of key substrings used to scrub captured I/O
+            payloads (``input.value`` / ``output.value``).  Any dict key
+            matching a substring is replaced with ``"[REDACTED]"`` before
+            serialization.  Default: ``["password", "secret", "api_key",
+            "token", "authorization"]``.  Set to ``[]`` to disable.
     """
 
     max_value_bytes: int = 4096
     max_list_length: int = 128
+    max_indexed_attributes: int = 50
     redact_patterns: List[str] = field(default_factory=list)
     redact_keys: List[str] = field(default_factory=list)
+    redact_io_keys: List[str] = field(default_factory=lambda: [
+        "password", "secret", "api_key", "token", "authorization",
+    ])
 
     def __post_init__(self) -> None:
         self._compiled_patterns = [re.compile(p) for p in self.redact_patterns]
@@ -124,3 +142,33 @@ class AttributePolicy:
             return truncated + "...[truncated]"
 
         return value
+
+    def scrub_io_payload(self, payload: Any) -> Any:
+        """Recursively redact sensitive keys from an I/O payload.
+
+        Applied to the deserialized ``input.value`` / ``output.value``
+        before serialization.  Uses :attr:`redact_io_keys` for matching.
+
+        Args:
+            payload: The raw payload (dict, list, or scalar).
+
+        Returns:
+            A copy with sensitive keys replaced by ``"[REDACTED]"``.
+        """
+        if not self.redact_io_keys:
+            return payload
+        return self._scrub(payload)
+
+    def _scrub(self, obj: Any) -> Any:
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                k_lower = k.lower() if isinstance(k, str) else str(k).lower()
+                if any(rk.lower() in k_lower for rk in self.redact_io_keys):
+                    out[k] = "[REDACTED]"
+                else:
+                    out[k] = self._scrub(v)
+            return out
+        if isinstance(obj, (list, tuple)):
+            return [self._scrub(item) for item in obj]
+        return obj

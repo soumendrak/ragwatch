@@ -31,6 +31,43 @@ class FrameworkAdapter(Protocol):
 
     Implementors declare how to extract state from function arguments and
     which telemetry extractors are relevant by default.
+
+    **Mandatory members** (required for ``isinstance`` / ``runtime_checkable``):
+
+    - ``name: str`` — unique adapter identifier (e.g. ``"langgraph"``).
+    - ``extract_state(args, kwargs) -> Optional[dict]`` — pull the
+      framework's state dict from decorated function arguments.
+    - ``default_extractors() -> List[TelemetryExtractor]`` — extractors
+      registered when the adapter is activated via ``configure(adapters=[...])``.
+
+    **Optional methods** (safe to omit; detected via ``getattr`` at runtime):
+
+    - ``capabilities() -> set`` — declares supported telemetry features
+      (e.g. ``{"routing", "tool_calls"}``).  Accessed via
+      :func:`get_capabilities`.
+    - ``normalize_result(raw_result, state) -> Optional[dict]`` — translates
+      framework-specific result shapes into well-known semantic keys.
+      When implemented, the return dict is stored as ``ctx.normalized``
+      and preferred by built-in extractors over raw result inspection.
+
+      Expected semantic keys (all optional):
+
+      - ``tool_calls``: ``list[dict]`` — LLM tool-call decisions
+      - ``routing_target``: ``str`` — destination node name
+      - ``routing_reason``: ``str`` — human-readable reason
+      - ``agent_answer``: ``str`` — final answer string
+      - ``is_fallback``: ``bool`` — whether the answer is a fallback
+      - ``rewritten_questions``: ``list[str]`` — decomposed queries
+      - ``is_clear``: ``bool`` — query clarity flag
+      - ``original_query``: ``str`` — original user query
+      - ``compression_tokens_before``: ``int``
+      - ``compression_tokens_after``: ``int``
+      - ``context_summary``: ``str``
+      - ``queries_run``: ``list[str]`` — search queries executed
+      - ``parents_retrieved``: ``list[str]`` — parent document IDs retrieved
+
+    Optional methods are **not** included in the Protocol to preserve
+    ``@runtime_checkable`` compatibility with minimal adapters.
     """
 
     name: str
@@ -75,6 +112,39 @@ def get_capabilities(adapter: FrameworkAdapter) -> set:
     if callable(method):
         return method()
     return set()
+
+
+def normalize_result(
+    adapter: Optional[FrameworkAdapter],
+    raw_result: Any,
+    state: Optional[dict],
+) -> Optional[dict]:
+    """Normalize a framework-specific result into semantic keys.
+
+    Adapters may optionally implement ``normalize_result(raw_result, state)``
+    returning a dict with well-known semantic keys such as:
+
+    - ``tool_calls``: list of tool call dicts
+    - ``routing_target``: destination node name
+    - ``routing_reason``: human-readable routing reason
+    - ``agent_answer``: final answer string
+    - ``is_fallback``: bool
+    - ``rewritten_questions``: list of rewritten queries
+    - ``is_clear``: bool (query clarity)
+    - ``original_query``: str
+    - ``compression_tokens_before``: int
+    - ``compression_tokens_after``: int
+    - ``context_summary``: str
+
+    If the adapter does not implement ``normalize_result``, returns ``None``
+    and extractors fall back to framework-specific field reading.
+    """
+    if adapter is None:
+        return None
+    method = getattr(adapter, "normalize_result", None)
+    if callable(method):
+        return method(raw_result, state)
+    return None
 
 
 # ---------------------------------------------------------------------------

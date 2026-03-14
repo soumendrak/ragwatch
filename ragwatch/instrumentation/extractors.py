@@ -88,28 +88,40 @@ class TelemetryExtractor(Protocol):
 
     Implementors must provide a ``name`` attribute and an ``extract`` method.
     The ``name`` is the string users pass in ``telemetry=["name"]``.
+
+    Two signatures are supported — the registry auto-detects which one
+    your extractor implements.
+
+    **Canonical (context-first — recommended):**
+
+    .. code-block:: python
+
+        class MyExtractor:
+            name = "my_ext"
+            def extract(self, context: InstrumentationContext) -> None:
+                result = context.raw_result
+                context.set_attribute("my.key", result.get("val"))
+
+    **Legacy (still supported):**
+
+    .. code-block:: python
+
+        class MyExtractor:
+            name = "my_ext"
+            def extract(self, span, span_name, args, result, state) -> None:
+                from ragwatch.instrumentation.attributes import safe_set_attribute
+                safe_set_attribute(span, "my.key", result.get("val"))
+
+    Context-first extractors receive the full
+    :class:`~ragwatch.instrumentation.context_model.InstrumentationContext`
+    which provides ``span``, ``state``, ``raw_result``, ``adapter``, and the
+    policy-enforced :meth:`set_attribute` writer.
     """
 
     name: str
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
-        """Extract telemetry from the decorated function's result/state.
-
-        Args:
-            span: The active OTel span.
-            span_name: Resolved span name.
-            args: Positional arguments passed to the decorated function.
-            result: Return value of the decorated function.
-            state: First ``dict`` found in *args* (LangGraph state convention),
-                or ``None``.
-        """
+    def extract(self, *args: Any, **kwargs: Any) -> None:
+        """Extract telemetry — see class docstring for supported signatures."""
         ...
 
 
@@ -214,40 +226,67 @@ def _rough_tokens(state: Optional[dict]) -> int:
 
 
 class ToolCallsExtractor:
-    """Extract LLM tool-call decisions from orchestrator results."""
+    """Extract LLM tool-call decisions from orchestrator results.
+
+    Reads ``ctx.normalized["tool_calls"]`` when available (adapter-driven),
+    otherwise falls back to scanning ``result["messages"]`` directly.
+    """
 
     name = "tool_calls"
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
+    def extract(self, *args: Any, **kwargs: Any) -> None:
         from ragwatch.instrumentation.helpers import record_tool_calls  # lazy
 
+        # Context-first path
+        if len(args) == 1 and hasattr(args[0], "normalized"):
+            ctx = args[0]
+            norm = ctx.normalized or {}
+            tc_list = norm.get("tool_calls") or _tool_calls_from_messages(ctx.raw_result)
+            record_tool_calls(tc_list, span=ctx.span)
+            return
+
+        # Legacy path: (span, span_name, args, result, state)
+        span, span_name, fn_args, result, state = args
         tc_list = _tool_calls_from_messages(result)
         record_tool_calls(tc_list, span=span)
 
 
 class RoutingExtractor:
-    """Extract routing decisions from dict results or Command objects."""
+    """Extract routing decisions from dict results or Command objects.
+
+    Reads ``ctx.normalized["routing_target"]`` when available (adapter-driven),
+    otherwise falls back to framework-specific result inspection.
+    """
 
     name = "routing"
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
+    def extract(self, *args: Any, **kwargs: Any) -> None:
         from ragwatch.instrumentation.helpers import record_routing  # lazy
 
-        # Routing from dict result (orchestrator pattern)
+        # Context-first path
+        if len(args) == 1 and hasattr(args[0], "normalized"):
+            ctx = args[0]
+            norm = ctx.normalized or {}
+            if "routing_target" in norm:
+                record_routing(
+                    ctx.span_name, norm["routing_target"],
+                    reason=norm.get("routing_reason", ""), span=ctx.span,
+                )
+                return
+            # Fall through to legacy logic with ctx fields
+            self._legacy_extract(
+                ctx.span, ctx.span_name, ctx.raw_result, ctx.state,
+            )
+            return
+
+        # Legacy path: (span, span_name, args, result, state)
+        span, span_name, fn_args, result, state = args
+        self._legacy_extract(span, span_name, result, state)
+
+    @staticmethod
+    def _legacy_extract(span, span_name, result, state):
+        from ragwatch.instrumentation.helpers import record_routing
+
         if isinstance(result, dict):
             tc_list = _tool_calls_from_messages(result)
             if tc_list:
@@ -258,7 +297,6 @@ class RoutingExtractor:
                 record_routing(span_name, "collect_answer",
                                reason="answer ready, no tool calls", span=span)
 
-        # Routing from Command (should_compress_context pattern)
         if _is_command(result):
             goto = str(result.goto)
             reason = f"tokens≈{_rough_tokens(state)} → {goto}" if state else goto
@@ -266,19 +304,47 @@ class RoutingExtractor:
 
 
 class AgentCompletionExtractor:
-    """Extract agent task completion metadata."""
+    """Extract agent task completion metadata.
+
+    Reads ``ctx.normalized["agent_answer"]`` and ``ctx.normalized["is_fallback"]``
+    when available, otherwise falls back to framework-specific field reading.
+    """
 
     name = "agent_completion"
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
+    def extract(self, *args: Any, **kwargs: Any) -> None:
         from ragwatch.instrumentation.helpers import record_agent_completion  # lazy
+
+        # Context-first path
+        if len(args) == 1 and hasattr(args[0], "normalized"):
+            ctx = args[0]
+            norm = ctx.normalized or {}
+            if "agent_answer" in norm:
+                answer = norm["agent_answer"]
+                is_fallback = norm.get("is_fallback", False)
+                state = ctx.state
+                record_agent_completion(
+                    status="fallback" if is_fallback else "success",
+                    iteration_count=state.get("iteration_count", 0) if state else 0,
+                    tool_call_count=state.get("tool_call_count", 0) if state else 0,
+                    question=state.get("question", "") if state else "",
+                    question_index=state.get("question_index", 0) if state else 0,
+                    answer_length=len(answer or ""),
+                    is_fallback=is_fallback,
+                    span=ctx.span,
+                )
+                return
+            # Fall through to legacy logic
+            self._legacy_extract(ctx.span, ctx.raw_result, ctx.state)
+            return
+
+        # Legacy path: (span, span_name, args, result, state)
+        span, span_name, fn_args, result, state = args
+        self._legacy_extract(span, result, state)
+
+    @staticmethod
+    def _legacy_extract(span, result, state):
+        from ragwatch.instrumentation.helpers import record_agent_completion
 
         if not isinstance(result, dict):
             return
@@ -307,19 +373,40 @@ class AgentCompletionExtractor:
 
 
 class QueryRewriteExtractor:
-    """Extract query decomposition telemetry."""
+    """Extract query decomposition telemetry.
+
+    Reads ``ctx.normalized["rewritten_questions"]`` when available,
+    otherwise falls back to framework-specific field reading.
+    """
 
     name = "query_rewrite"
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
+    def extract(self, *args: Any, **kwargs: Any) -> None:
         from ragwatch.instrumentation.helpers import record_query_rewrite  # lazy
+
+        # Context-first path
+        if len(args) == 1 and hasattr(args[0], "normalized"):
+            ctx = args[0]
+            norm = ctx.normalized or {}
+            if "rewritten_questions" in norm:
+                record_query_rewrite(
+                    norm.get("original_query", ""),
+                    norm["rewritten_questions"],
+                    norm.get("is_clear", False),
+                    span=ctx.span,
+                )
+                return
+            # Fall through to legacy
+            self._legacy_extract(ctx.span, ctx.raw_result, ctx.state)
+            return
+
+        # Legacy path: (span, span_name, args, result, state)
+        span, span_name, fn_args, result, state = args
+        self._legacy_extract(span, result, state)
+
+    @staticmethod
+    def _legacy_extract(span, result, state):
+        from ragwatch.instrumentation.helpers import record_query_rewrite
 
         if not isinstance(result, dict):
             return
@@ -334,19 +421,41 @@ class QueryRewriteExtractor:
 
 
 class CompressionExtractor:
-    """Extract context compression statistics."""
+    """Extract context compression statistics.
+
+    Reads ``ctx.normalized["compression_tokens_before"]`` etc. when available,
+    otherwise falls back to framework-specific field reading.
+    """
 
     name = "compression"
 
-    def extract(
-        self,
-        span: otel_trace.Span,
-        span_name: str,
-        args: tuple,
-        result: Any,
-        state: Optional[dict],
-    ) -> None:
+    def extract(self, *args: Any, **kwargs: Any) -> None:
         from ragwatch.instrumentation.helpers import record_context_compression  # lazy
+
+        # Context-first path
+        if len(args) == 1 and hasattr(args[0], "normalized"):
+            ctx = args[0]
+            norm = ctx.normalized or {}
+            if "compression_tokens_before" in norm:
+                record_context_compression(
+                    tokens_before=norm["compression_tokens_before"],
+                    tokens_after=norm.get("compression_tokens_after", 0),
+                    queries_run=norm.get("queries_run") or None,
+                    parents_retrieved=norm.get("parents_retrieved") or None,
+                    span=ctx.span,
+                )
+                return
+            # Fall through to legacy
+            self._legacy_extract(ctx.span, ctx.raw_result, ctx.state)
+            return
+
+        # Legacy path: (span, span_name, args, result, state)
+        span, span_name, fn_args, result, state = args
+        self._legacy_extract(span, result, state)
+
+    @staticmethod
+    def _legacy_extract(span, result, state):
+        from ragwatch.instrumentation.helpers import record_context_compression
 
         if not isinstance(result, dict) or state is None:
             return

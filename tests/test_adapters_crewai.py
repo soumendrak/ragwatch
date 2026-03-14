@@ -96,3 +96,77 @@ async def test_endpoint_async(_setup):
 
     await run_crew({"q": "test"})
     assert any(s.name == "async-crew" for s in exporter.get_finished_spans())
+
+
+# ---------------------------------------------------------------------------
+# CrewAI normalize_result()
+# ---------------------------------------------------------------------------
+
+from ragwatch.adapters.crewai.adapter import CrewAIAdapter
+
+
+class TestCrewAINormalizeResult:
+
+    def test_normalize_task_output_dict(self):
+        adapter = CrewAIAdapter()
+        result = {"task_output": "The answer is 42", "status": "success"}
+        norm = adapter.normalize_result(result, {})
+        assert norm is not None
+        assert norm["agent_answer"] == "The answer is 42"
+        assert norm["is_fallback"] is False
+
+    def test_normalize_output_key(self):
+        adapter = CrewAIAdapter()
+        result = {"output": "Summary of findings", "status": "done"}
+        norm = adapter.normalize_result(result, {})
+        assert norm["agent_answer"] == "Summary of findings"
+
+    def test_normalize_tools_used(self):
+        adapter = CrewAIAdapter()
+        result = {"task_output": "answer", "tools_used": ["search", "calculator"]}
+        norm = adapter.normalize_result(result, {})
+        assert norm["tool_calls"] == [{"name": "search"}, {"name": "calculator"}]
+
+    def test_normalize_tools_used_as_dicts(self):
+        adapter = CrewAIAdapter()
+        tc = [{"name": "search", "args": {"q": "test"}}]
+        result = {"task_output": "answer", "tools_used": tc}
+        norm = adapter.normalize_result(result, {})
+        assert norm["tool_calls"] == tc
+
+    def test_normalize_fallback_on_error_status(self):
+        adapter = CrewAIAdapter()
+        result = {"task_output": "", "status": "error"}
+        norm = adapter.normalize_result(result, {})
+        assert norm["is_fallback"] is True
+
+    def test_normalize_task_output_object_with_raw(self):
+        """CrewAI TaskOutput-like object with .raw attribute."""
+        class FakeTaskOutput:
+            raw = "The raw answer"
+        adapter = CrewAIAdapter()
+        norm = adapter.normalize_result(FakeTaskOutput(), {})
+        assert norm is not None
+        assert norm["agent_answer"] == "The raw answer"
+
+    def test_normalize_task_output_object_with_output(self):
+        """CrewAI TaskOutput-like object with .output attribute."""
+        class FakeTaskOutput:
+            output = "The output"
+        adapter = CrewAIAdapter()
+        norm = adapter.normalize_result(FakeTaskOutput(), {})
+        assert norm["agent_answer"] == "The output"
+
+    def test_normalize_plain_string_returns_none(self):
+        adapter = CrewAIAdapter()
+        assert adapter.normalize_result("just a string", {}) is None
+
+    def test_normalize_empty_dict_returns_none(self):
+        adapter = CrewAIAdapter()
+        assert adapter.normalize_result({}, {}) is None
+
+    def test_normalize_empty_tools_list_not_included(self):
+        adapter = CrewAIAdapter()
+        result = {"task_output": "answer", "tools_used": []}
+        norm = adapter.normalize_result(result, {})
+        assert "tool_calls" not in norm

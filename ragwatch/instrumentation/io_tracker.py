@@ -29,6 +29,18 @@ def _safe_serialize(value: Any) -> str:
     return text
 
 
+def _get_io_policy():
+    """Return the active AttributePolicy if it has I/O redaction keys."""
+    try:
+        from ragwatch import get_active_config
+        cfg = get_active_config()
+        if cfg is not None and cfg.attribute_policy is not None:
+            return cfg.attribute_policy
+    except Exception:
+        pass
+    return None
+
+
 def track_input(span: otel_trace.Span, args: tuple, kwargs: dict) -> None:
     """Record function arguments on *span* as ``input.value``.
 
@@ -42,6 +54,9 @@ def track_input(span: otel_trace.Span, args: tuple, kwargs: dict) -> None:
         payload["args"] = list(args)
     if kwargs:
         payload["kwargs"] = kwargs
+    policy = _get_io_policy()
+    if policy is not None:
+        payload = policy.scrub_io_payload(payload)
     safe_set_attribute(span, INPUT_VALUE, _safe_serialize(payload))
 
 
@@ -52,4 +67,8 @@ def track_output(span: otel_trace.Span, result: Any) -> None:
         span: The active OTel span.
         result: The return value of the decorated function.
     """
-    safe_set_attribute(span, OUTPUT_VALUE, _safe_serialize(result))
+    policy = _get_io_policy()
+    scrubbed = result
+    if policy is not None:
+        scrubbed = policy.scrub_io_payload(result)
+    safe_set_attribute(span, OUTPUT_VALUE, _safe_serialize(scrubbed))

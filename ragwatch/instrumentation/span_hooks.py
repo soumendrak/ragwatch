@@ -53,8 +53,41 @@ def _is_strict_mode() -> bool:
 class SpanHook(Protocol):
     """Contract for span lifecycle hooks.
 
-    Implementors may define ``on_start`` and/or ``on_end`` to enrich spans
-    with custom attributes, events, or side-effects.
+    Implementors may define ``on_start``, ``on_end``, and/or ``on_error``
+    to enrich spans with custom attributes, events, or side-effects.
+
+    Both context-aware and legacy signatures are supported — the dispatch
+    auto-detects whether your hook accepts a ``context=`` keyword argument.
+
+    **Canonical (context-first — recommended):**
+
+    .. code-block:: python
+
+        class MyHook:
+            def on_start(self, span, args, kwargs, *, context=None):
+                context.set_attribute("custom.start", True)
+
+            def on_end(self, span, result, *, context=None):
+                context.set_attribute("custom.result_type", type(result).__name__)
+
+            def on_error(self, span, exception, *, context=None):
+                context.set_attribute("custom.error", str(exception))
+
+    **Legacy (still supported):**
+
+    .. code-block:: python
+
+        class MyHook:
+            def on_start(self, span, args, kwargs):
+                span.set_attribute("custom.start", True)
+
+            def on_end(self, span, result):
+                pass
+
+    The ``context`` parameter is an
+    :class:`~ragwatch.instrumentation.context_model.InstrumentationContext`
+    providing ``span``, ``state``, ``raw_result``, ``adapter``, and the
+    policy-enforced :meth:`set_attribute` writer.
     """
 
     def on_start(
@@ -62,27 +95,18 @@ class SpanHook(Protocol):
         span: otel_trace.Span,
         args: tuple,
         kwargs: dict,
+        **kw: Any,
     ) -> None:
-        """Called immediately after the span is created.
-
-        Args:
-            span: The newly started OTel span.
-            args: Positional arguments passed to the decorated function.
-            kwargs: Keyword arguments passed to the decorated function.
-        """
+        """Called immediately after the span is created."""
         ...
 
     def on_end(
         self,
         span: otel_trace.Span,
         result: Any,
+        **kw: Any,
     ) -> None:
-        """Called after the decorated function returns (before span closes).
-
-        Args:
-            span: The active OTel span.
-            result: Return value of the decorated function (post-transformation).
-        """
+        """Called after the decorated function returns (before span closes)."""
         ...
 
 

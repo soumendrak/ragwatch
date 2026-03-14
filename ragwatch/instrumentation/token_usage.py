@@ -44,10 +44,34 @@ class TokenExtractor(Protocol):
     """Contract for pluggable token-usage extractors.
 
     Implementors scan a result object and record token counts on the span.
+
+    Two signatures are supported — the dispatch auto-detects which one
+    your extractor implements.
+
+    **Canonical (context-first — recommended):**
+
+    .. code-block:: python
+
+        class MyTokenExtractor:
+            def extract(self, context: InstrumentationContext) -> None:
+                usage = getattr(context.raw_result, "usage", None)
+                if usage:
+                    context.set_attribute("llm.token_count.prompt", usage["input"])
+
+    **Legacy (still supported):**
+
+    .. code-block:: python
+
+        class MyTokenExtractor:
+            def extract(self, span, result) -> None:
+                from ragwatch.instrumentation.attributes import safe_set_attribute
+                usage = getattr(result, "usage", None)
+                if usage:
+                    safe_set_attribute(span, "llm.token_count.prompt", usage["input"])
     """
 
-    def extract(self, span: Any, result: Any) -> None:
-        """Extract token usage from *result* and set attributes on *span*."""
+    def extract(self, *args: Any, **kwargs: Any) -> None:
+        """Extract token usage — see class docstring for supported signatures."""
         ...
 
 
