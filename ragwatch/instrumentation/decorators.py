@@ -22,7 +22,7 @@ from ragwatch.instrumentation.embedding import store_embedding_in_context
 from ragwatch.instrumentation.io_tracker import track_input, track_output
 from ragwatch.instrumentation.result_transformers import transform_result
 from ragwatch.instrumentation.attributes import safe_set_attribute
-from ragwatch.instrumentation.semconv import OPENINFERENCE_SPAN_KIND
+from ragwatch.instrumentation.semconv import ERROR_TYPE, OPENINFERENCE_SPAN_KIND
 from ragwatch.instrumentation.span_hooks import (
     SpanHook, run_on_end, run_on_error, run_on_start,
 )
@@ -202,6 +202,7 @@ def _make_wrapper(
                     ctx.exception = exc
                     span.set_status(otel_trace.StatusCode.ERROR, str(exc))
                     span.record_exception(exc)
+                    safe_set_attribute(span, ERROR_TYPE, type(exc).__name__)
                     run_on_error(span, exc, local_hooks=_hooks, context=ctx)
                     raise
                 ctx.raw_result = raw
@@ -242,6 +243,7 @@ def _make_wrapper(
                 ctx.exception = exc
                 span.set_status(otel_trace.StatusCode.ERROR, str(exc))
                 span.record_exception(exc)
+                safe_set_attribute(span, ERROR_TYPE, type(exc).__name__)
                 run_on_error(span, exc, local_hooks=_hooks, context=ctx)
                 raise
             ctx.raw_result = raw

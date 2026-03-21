@@ -76,6 +76,10 @@ ROUTING_FROM_NODE         = "routing.from_node"
 ROUTING_TO_NODE           = "routing.to_node"
 ROUTING_REASON            = "routing.reason"
 
+# --- Error recording -------------------------
+# OTel semconv: https://opentelemetry.io/docs/specs/semconv/general/recording-errors/
+ERROR_TYPE = "error.type"
+
 # --- Response / feedback ---------------------
 RESPONSE_LENGTH = "response.length"
 USER_FEEDBACK_SCORE = "user.feedback_score"
