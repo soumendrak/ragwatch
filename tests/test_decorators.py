@@ -8,7 +8,7 @@ from tests.conftest import InMemorySpanExporter
 from ragwatch import SpanKind, trace
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.core.config import RAGWatchConfig
-from ragwatch.instrumentation.semconv import OPENINFERENCE_SPAN_KIND
+from ragwatch.instrumentation.semconv import ERROR_TYPE, OPENINFERENCE_SPAN_KIND
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +131,32 @@ def test_trace_embedding_stores_context(_setup):
     # but the span should have been created correctly)
     finished = exporter.get_finished_spans()
     assert any(s.name == "embed" for s in finished)
+
+
+def test_trace_exception_sets_error_type(_setup):
+    exporter = _setup
+
+    @trace("sync-err")
+    def fail():
+        raise ValueError("bad input")
+
+    with pytest.raises(ValueError, match="bad input"):
+        fail()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "sync-err")
+    assert span.attributes.get(ERROR_TYPE) == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_trace_async_exception_sets_error_type(_setup):
+    exporter = _setup
+
+    @trace("async-err-type")
+    async def fail():
+        raise TypeError("wrong type")
+
+    with pytest.raises(TypeError, match="wrong type"):
+        await fail()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "async-err-type")
+    assert span.attributes.get(ERROR_TYPE) == "TypeError"
