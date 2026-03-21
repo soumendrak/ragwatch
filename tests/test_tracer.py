@@ -182,3 +182,69 @@ def test_public_configure():
     exporter = InMemorySpanExporter()
     configure(RAGWatchConfig(service_name="pub", exporter=exporter))
     assert get_tracer_provider() is not None
+
+
+# ---------------------------------------------------------------------------
+# Sampler support (P1)
+# ---------------------------------------------------------------------------
+
+def test_default_sampler_records_all_spans():
+    """With no sampler configured (ALWAYS_ON default), every span is exported."""
+    exporter = InMemorySpanExporter()
+    configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter), _force_flush=True
+    )
+
+    tracer = get_tracer()
+    with tracer.start_as_current_span("span-a"):
+        pass
+    with tracer.start_as_current_span("span-b"):
+        pass
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "span-a" in names
+    assert "span-b" in names
+
+
+def test_always_off_sampler_drops_all_spans():
+    """ALWAYS_OFF sampler should result in zero exported spans."""
+    from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+
+    exporter = InMemorySpanExporter()
+    configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter, sampler=ALWAYS_OFF),
+        _force_flush=True,
+    )
+
+    tracer = get_tracer()
+    with tracer.start_as_current_span("dropped"):
+        pass
+
+    assert exporter.get_finished_spans() == []
+
+
+def test_trace_id_ratio_sampler_wired():
+    """TraceIdRatioBased sampler is accepted and wired into the TracerProvider."""
+    from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+
+    sampler = TraceIdRatioBased(0.5)
+    exporter = InMemorySpanExporter()
+    provider = configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter, sampler=sampler),
+        _force_flush=True,
+    )
+
+    assert provider.sampler is sampler
+
+
+def test_sampler_none_uses_sdk_default():
+    """When sampler=None, TracerProvider uses its built-in ParentBased(ALWAYS_ON) default."""
+    from opentelemetry.sdk.trace.sampling import ParentBased
+
+    exporter = InMemorySpanExporter()
+    provider = configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter, sampler=None),
+        _force_flush=True,
+    )
+
+    assert isinstance(provider.sampler, ParentBased)

@@ -42,7 +42,10 @@ def configure_tracer(
         }
     )
 
-    provider = TracerProvider(resource=resource)
+    provider = TracerProvider(
+        resource=resource,
+        **({"sampler": config.sampler} if config.sampler is not None else {}),
+    )
 
     # Collect all exporters: prefer the new list API, fall back to legacy single
     all_exporters = list(config.exporters) or (

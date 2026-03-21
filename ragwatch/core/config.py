@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from opentelemetry.sdk.trace.export import SpanExporter
+from opentelemetry.sdk.trace.sampling import Sampler
 
 if TYPE_CHECKING:
     from ragwatch.adapters.base import FrameworkAdapter
@@ -37,6 +38,10 @@ class RAGWatchConfig:
         attribute_policy: An :class:`AttributePolicy` controlling truncation
             and redaction of custom span attribute values.  ``None`` means
             no policy enforcement (default).
+        sampler: An OTel :class:`~opentelemetry.sdk.trace.sampling.Sampler`
+            instance for head-based sampling (e.g.
+            ``TraceIdRatioBased(0.1)`` to keep 10 % of traces).
+            ``None`` means the SDK default (``ALWAYS_ON``).
         strict_mode: When ``True``, exceptions from hooks, extractors, and
             result transformers are re-raised instead of swallowed.  Useful
             for development and testing.  Default: ``False``.
@@ -67,5 +72,6 @@ class RAGWatchConfig:
     custom_transformers: List[Any] = field(default_factory=list)  # List[ResultTransformer]
     custom_token_extractors: List[Any] = field(default_factory=list)  # List[TokenExtractor]
     attribute_policy: Any = None  # Optional[AttributePolicy]
+    sampler: Optional[Sampler] = None
     strict_mode: bool = False
     global_auto_track_io: bool = True
