@@ -13,7 +13,9 @@ stable before adding more framework integrations.
 
 ## v0.5 Semantic Schema Stabilization
 
-- Finalize stable vs experimental attribute groups.
+- Finalize stable vs experimental attribute groups. Initial machine-readable
+  groups are available via `STANDARD_ATTRIBUTES`, `STABLE_ATTRIBUTES`,
+  `EXPERIMENTAL_ATTRIBUTES`, and `get_attribute_stability()`.
 - Add compatibility tests for documented telemetry examples.
 - Clarify feedback correlation semantics and add span-link support where useful.
 

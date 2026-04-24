@@ -22,6 +22,26 @@ def test_all_semconv_keys_are_strings():
             assert isinstance(value, str), f"{name} should be a string"
 
 
+def test_attribute_stability_sets_are_disjoint():
+    assert semconv.STANDARD_ATTRIBUTES.isdisjoint(semconv.STABLE_ATTRIBUTES)
+    assert semconv.STANDARD_ATTRIBUTES.isdisjoint(semconv.EXPERIMENTAL_ATTRIBUTES)
+    assert semconv.STABLE_ATTRIBUTES.isdisjoint(semconv.EXPERIMENTAL_ATTRIBUTES)
+
+
+def test_all_attributes_registry_covers_known_attributes():
+    expected = _get_semconv_values()
+    assert expected <= semconv.ALL_ATTRIBUTES
+
+
+def test_get_attribute_stability():
+    assert (
+        semconv.get_attribute_stability(semconv.OPENINFERENCE_SPAN_KIND) == "standard"
+    )
+    assert semconv.get_attribute_stability(semconv.USER_FEEDBACK_SCORE) == "stable"
+    assert semconv.get_attribute_stability(semconv.QUERY_IS_CLEAR) == "experimental"
+    assert semconv.get_attribute_stability("unknown.attribute") is None
+
+
 def _get_ragwatch_source_files() -> list[Path]:
     """Return all .py files under ragwatch/, excluding semconv.py."""
     root = Path(__file__).resolve().parent.parent / "ragwatch"

@@ -52,6 +52,13 @@ from ragwatch.instrumentation.helpers import (
     record_routing,
     record_tool_calls,
 )
+from ragwatch.instrumentation.semconv import (
+    ALL_ATTRIBUTES,
+    EXPERIMENTAL_ATTRIBUTES,
+    STABLE_ATTRIBUTES,
+    STANDARD_ATTRIBUTES,
+    get_attribute_stability,
+)
 
 
 _ACTIVE_CONFIG: RAGWatchConfig | None = None
@@ -166,4 +173,10 @@ __all__ = [
     "record_tool_calls",
     "record_context_compression",
     "record_query_rewrite",
+    # Semantic convention registry
+    "ALL_ATTRIBUTES",
+    "STANDARD_ATTRIBUTES",
+    "STABLE_ATTRIBUTES",
+    "EXPERIMENTAL_ATTRIBUTES",
+    "get_attribute_stability",
 ]

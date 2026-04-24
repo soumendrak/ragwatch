@@ -111,3 +111,89 @@ QUERY_ORIGINAL = "query.original"
 QUERY_REWRITTEN_COUNT = "query.rewritten_count"
 QUERY_REWRITTEN_QUESTIONS = "query.rewritten_questions"  # list[str]
 QUERY_IS_CLEAR = "query.is_clear"
+
+
+STANDARD_ATTRIBUTES = frozenset(
+    {
+        OPENINFERENCE_SPAN_KIND,
+        LLM_TOKEN_COUNT_PROMPT,
+        LLM_TOKEN_COUNT_COMPLETION,
+        LLM_TOKEN_COUNT_TOTAL,
+        INPUT_VALUE,
+        OUTPUT_VALUE,
+    }
+)
+
+STABLE_ATTRIBUTES = frozenset(
+    {
+        EMBEDDING_MODEL_NAME,
+        EMBEDDING_DIMENSIONS,
+        EMBEDDING_DURATION_MS,
+        RETRIEVAL_TOP_K,
+        RETRIEVAL_CHUNKS_RETURNED,
+        CHUNK_RELEVANCE_SCORE,
+        CHUNK_RELEVANCE_SCORES,
+        CHUNK_COUNT,
+        CHUNK_PREFIX,
+        CHUNK_MIN_SCORE,
+        CHUNK_MAX_SCORE,
+        CHUNK_AVG_SCORE,
+        CHUNK_QUERY,
+        AGENT_COMPLETION_STATUS,
+        AGENT_ITERATION_COUNT,
+        AGENT_TOOL_CALL_COUNT,
+        AGENT_QUESTION,
+        AGENT_QUESTION_INDEX,
+        AGENT_ANSWER_LENGTH,
+        AGENT_IS_FALLBACK,
+        LLM_TOOL_CALLS_COUNT,
+        LLM_TOOL_CALLS_NAMES,
+        LLM_TOOL_CALL_PREFIX,
+        ROUTING_FROM_NODE,
+        ROUTING_TO_NODE,
+        ROUTING_REASON,
+        ERROR_TYPE,
+        RESPONSE_LENGTH,
+        USER_FEEDBACK_SCORE,
+        USER_FEEDBACK_TRACE_ID,
+        USER_FEEDBACK_SPAN_ID,
+        RAGWATCH_SDK_VERSION,
+    }
+)
+
+EXPERIMENTAL_ATTRIBUTES = frozenset(
+    {
+        COMPRESSION_TOKENS_BEFORE,
+        COMPRESSION_TOKENS_AFTER,
+        COMPRESSION_RATIO,
+        COMPRESSION_QUERIES_RUN,
+        COMPRESSION_PARENTS_RETRIEVED,
+        COMPRESSION_UNIQUE_QUERIES,
+        COMPRESSION_UNIQUE_PARENTS,
+        QUERY_ORIGINAL,
+        QUERY_REWRITTEN_COUNT,
+        QUERY_REWRITTEN_QUESTIONS,
+        QUERY_IS_CLEAR,
+    }
+)
+
+ALL_ATTRIBUTES = STANDARD_ATTRIBUTES | STABLE_ATTRIBUTES | EXPERIMENTAL_ATTRIBUTES
+
+
+def get_attribute_stability(attribute: str) -> str | None:
+    """Return the stability tier for a semantic attribute.
+
+    Args:
+        attribute: Semantic attribute name.
+
+    Returns:
+        One of ``"standard"``, ``"stable"``, ``"experimental"``, or ``None``
+        when the attribute is not part of the RAGWatch schema registry.
+    """
+    if attribute in STANDARD_ATTRIBUTES:
+        return "standard"
+    if attribute in STABLE_ATTRIBUTES:
+        return "stable"
+    if attribute in EXPERIMENTAL_ATTRIBUTES:
+        return "experimental"
+    return None

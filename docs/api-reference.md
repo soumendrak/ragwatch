@@ -320,13 +320,8 @@ class MyTransformer:
     def span_kind(self):
         return SpanKind.TOOL
 
-    # Context-first
     def transform(self, context: InstrumentationContext):
         return str(context.raw_result)
-
-    # Legacy
-    def transform(self, span, args, kwargs, result, result_formatter):
-        return str(result)
 ```
 
 ### `TokenExtractor`
@@ -335,12 +330,32 @@ Pluggable token-usage extraction.
 
 ```python
 class MyTokenExtractor:
-    # Context-first
     def extract(self, context: InstrumentationContext) -> None:
         usage = getattr(context.raw_result, "usage", None)
         if usage:
             context.set_attribute("llm.token_count.prompt", usage["input_tokens"])
 ```
+
+---
+
+## Semantic Convention Registry
+
+RAGWatch exposes machine-readable attribute stability groups:
+
+```python
+from ragwatch import STABLE_ATTRIBUTES, get_attribute_stability
+
+assert "user.feedback_score" in STABLE_ATTRIBUTES
+assert get_attribute_stability("query.is_clear") == "experimental"
+```
+
+| Export | Description |
+|--------|-------------|
+| `STANDARD_ATTRIBUTES` | Re-exported OpenInference attributes |
+| `STABLE_ATTRIBUTES` | RAGWatch attributes treated as stable API |
+| `EXPERIMENTAL_ATTRIBUTES` | RAGWatch attributes that may still evolve |
+| `ALL_ATTRIBUTES` | Union of all registered semantic attributes |
+| `get_attribute_stability(attribute)` | Returns `standard`, `stable`, `experimental`, or `None` |
 
 ---
 
@@ -398,5 +413,9 @@ from ragwatch import (
     # Telemetry helpers
     record_chunks, record_agent_completion, record_routing,
     record_tool_calls, record_context_compression, record_query_rewrite,
+
+    # Semantic convention registry
+    STANDARD_ATTRIBUTES, STABLE_ATTRIBUTES, EXPERIMENTAL_ATTRIBUTES,
+    ALL_ATTRIBUTES, get_attribute_stability,
 )
 ```
