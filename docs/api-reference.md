@@ -8,7 +8,7 @@ Complete reference for the RAGWatch public API surface.
 
 ### `configure(config=None, **kwargs)`
 
-Initialize the RAGWatch SDK. Idempotent — safe to call multiple times (resets all registries).
+Initialize the RAGWatch SDK and return the active `RAGWatchRuntime`. Idempotent — safe to call multiple times (resets all registries).
 
 ```python
 import ragwatch
@@ -18,6 +18,9 @@ ragwatch.configure(RAGWatchConfig(
     service_name="my-app",
     exporter=ConsoleSpanExporter(),
 ))
+
+runtime = ragwatch.configure(service_name="my-app")
+runtime.trace("my-operation")
 
 # Or with kwargs
 ragwatch.configure(service_name="my-app")
@@ -29,6 +32,8 @@ ragwatch.configure(service_name="my-app")
 |-----------|------|-------------|
 | `config` | `RAGWatchConfig \| None` | Configuration instance. If `None`, created from `**kwargs`. |
 | `**kwargs` | | Forwarded to `RAGWatchConfig` when `config` is `None`. |
+
+**Returns:** `RAGWatchRuntime` — read-only accessor for active SDK state.
 
 ---
 
@@ -270,13 +275,8 @@ Pluggable telemetry extraction. Must have a `name` attribute and an `extract()` 
 class MyExtractor:
     name = "my_extractor"
 
-    # Context-first (recommended)
     def extract(self, context: InstrumentationContext) -> None:
         context.set_attribute("custom.key", "value")
-
-    # Legacy (still supported)
-    def extract(self, span, span_name, args, result, state) -> None:
-        safe_set_attribute(span, "custom.key", "value")
 ```
 
 **Registry:** `get_default_registry()` returns the `ExtractorRegistry`.
@@ -287,14 +287,9 @@ Span lifecycle hook with `on_start`, `on_end`, and optional `on_error`.
 
 ```python
 class MyHook:
-    # Context-first (recommended)
     def on_start(self, span, args, kwargs, *, context: InstrumentationContext = None): ...
     def on_end(self, span, result, *, context: InstrumentationContext = None): ...
     def on_error(self, span, exception, *, context: InstrumentationContext = None): ...
-
-    # Legacy (still supported)
-    def on_start(self, span, args, kwargs): ...
-    def on_end(self, span, result): ...
 ```
 
 **Registration:** `register_global_hook(hook)` or `RAGWatchConfig(global_span_hooks=[...])`.

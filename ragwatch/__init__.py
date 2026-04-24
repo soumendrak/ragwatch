@@ -27,7 +27,11 @@ from ragwatch.instrumentation.attribute_policy import (
     validate_attribute_name,
 )
 from ragwatch.instrumentation.attributes import safe_set_attribute, safe_set_attributes
-from ragwatch.instrumentation.span_hooks import SpanHook, register_global_hook, clear_global_hooks
+from ragwatch.instrumentation.span_hooks import (
+    SpanHook,
+    register_global_hook,
+    clear_global_hooks,
+)
 from ragwatch.instrumentation.result_transformers import (
     ResultTransformer,
     ResultTransformerRegistry,
@@ -58,8 +62,8 @@ def get_active_config() -> RAGWatchConfig | None:
     return _ACTIVE_CONFIG
 
 
-def configure(config: RAGWatchConfig | None = None, **kwargs) -> None:
-    """Initialize the RAGWatch SDK.
+def configure(config: RAGWatchConfig | None = None, **kwargs) -> RAGWatchRuntime:
+    """Initialize the RAGWatch SDK and return the active runtime.
 
     This function is **idempotent-safe**: calling it multiple times resets
     all global registries (hooks, extractors, adapters, transformers, token
@@ -121,6 +125,8 @@ def configure(config: RAGWatchConfig | None = None, **kwargs) -> None:
         for ext in config.custom_token_extractors:
             register_token_extractor(ext)
 
+    return RAGWatchRuntime.current()
+
 
 __all__ = [
     # --- Stable API -----------------------------------------------------------
@@ -135,7 +141,7 @@ __all__ = [
     # Quality scores
     "record_feedback",
     "chunk_relevance_score",
-    # Extension protocols (context-first canonical, legacy supported)
+    # Extension protocols (InstrumentationContext canonical)
     "TelemetryExtractor",
     "ExtractorRegistry",
     "get_default_registry",

@@ -15,7 +15,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 
 class RAGWatchRuntime:
@@ -47,6 +47,7 @@ class RAGWatchRuntime:
     def config(self) -> Any:
         """The active :class:`RAGWatchConfig`, or ``None``."""
         from ragwatch import get_active_config
+
         return get_active_config()
 
     @property
@@ -67,11 +68,13 @@ class RAGWatchRuntime:
     @property
     def extractor_registry(self) -> Any:
         from ragwatch.instrumentation.extractors import get_default_registry
+
         return get_default_registry()
 
     @property
     def adapter_registry(self) -> dict:
         from ragwatch.adapters.base import get_all_adapters
+
         return get_all_adapters()
 
     @property
@@ -79,12 +82,20 @@ class RAGWatchRuntime:
         from ragwatch.instrumentation.result_transformers import (
             get_default_transformer_registry,
         )
+
         return get_default_transformer_registry()
 
     @property
     def token_extractor_registry(self) -> list:
         from ragwatch.instrumentation.token_usage import get_token_extractors
+
         return get_token_extractors()
+
+    def trace(self, *args: Any, **kwargs: Any) -> Any:
+        """Create a traced decorator bound to the active runtime state."""
+        from ragwatch.instrumentation.decorators import trace
+
+        return trace(*args, **kwargs)
 
     def __repr__(self) -> str:
         cfg = self.config

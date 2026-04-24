@@ -50,4 +50,11 @@ def store_embedding_in_context(result: Any) -> None:
         result: Return value from the decorated function.
     """
     if isinstance(result, list) and result and isinstance(result[0], (int, float)):
-        set_query_embedding(result)
+        try:
+            from ragwatch import get_active_config
+
+            config = get_active_config()
+            max_dims = config.max_embedding_dims if config is not None else 512
+        except Exception:
+            max_dims = 512
+        set_query_embedding(result[:max_dims])

@@ -1,23 +1,19 @@
-"""Thread-local context for storing the query embedding between stages.
+"""Async-safe context for storing the query embedding between stages.
 
-The query embedding is stored in a Python ``threading.local()`` object
-(thread-local, **not** propagated across process boundaries).  This keeps
-large vectors out of OTel baggage while allowing the retrieval stage to
-compute ``chunk_relevance_score`` without re-embedding the query.
-
-We use plain thread-local storage instead of OTel ``Context`` because OTel
-context is scoped to spans — values set inside a span's context manager
-are lost when the span exits.  Thread-local storage persists across
-sequential function calls on the same thread, which is exactly what the
-linear RAG pipeline needs.
+The query embedding is stored in a ``contextvars.ContextVar``. This keeps
+large vectors out of OTel baggage while preserving request isolation for
+async workloads and concurrent tasks.
 """
 
 from __future__ import annotations
 
-import threading
+from contextvars import ContextVar
 from typing import Optional
 
-_thread_local = threading.local()
+_query_embedding: ContextVar[Optional[list[float]]] = ContextVar(
+    "ragwatch_query_embedding",
+    default=None,
+)
 
 
 def set_query_embedding(embedding: list[float]) -> None:
@@ -26,7 +22,7 @@ def set_query_embedding(embedding: list[float]) -> None:
     Args:
         embedding: Query embedding vector (up to 512-dim).
     """
-    _thread_local.query_embedding = embedding
+    _query_embedding.set(embedding)
 
 
 def get_query_embedding() -> Optional[list[float]]:
@@ -35,9 +31,9 @@ def get_query_embedding() -> Optional[list[float]]:
     Returns:
         The stored embedding list, or ``None`` if not set.
     """
-    return getattr(_thread_local, "query_embedding", None)
+    return _query_embedding.get()
 
 
 def clear_query_embedding() -> None:
     """Remove the stored query embedding from thread-local storage."""
-    _thread_local.query_embedding = None
+    _query_embedding.set(None)

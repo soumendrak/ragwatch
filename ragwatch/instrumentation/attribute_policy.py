@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, List
 
 # ---------------------------------------------------------------------------
 # Attribute name validation
 # ---------------------------------------------------------------------------
 
 # Dot-separated, lowercase alphanumeric + underscores per segment
-_VALID_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.\d+(\.[a-z][a-z0-9_]*)*)*$")
+_VALID_NAME_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*(\.\d+(\.[a-z][a-z0-9_]*)*)*$"
+)
 
 # Pattern to detect indexed attributes like retrieval.chunk.0.content
 _INDEXED_ATTR_PATTERN = re.compile(r"^(.+)\.(\d+)\.")
@@ -60,6 +62,7 @@ def validate_attribute_name(name: str) -> bool:
 # ---------------------------------------------------------------------------
 # AttributePolicy
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class AttributePolicy:
@@ -93,9 +96,15 @@ class AttributePolicy:
     max_indexed_attributes: int = 50
     redact_patterns: List[str] = field(default_factory=list)
     redact_keys: List[str] = field(default_factory=list)
-    redact_io_keys: List[str] = field(default_factory=lambda: [
-        "password", "secret", "api_key", "token", "authorization",
-    ])
+    redact_io_keys: List[str] = field(
+        default_factory=lambda: [
+            "password",
+            "secret",
+            "api_key",
+            "token",
+            "authorization",
+        ]
+    )
 
     def __post_init__(self) -> None:
         self._compiled_patterns = [re.compile(p) for p in self.redact_patterns]
@@ -120,7 +129,7 @@ class AttributePolicy:
         # List/tuple cardinality cap
         if isinstance(value, (list, tuple)):
             if len(value) > self.max_list_length:
-                truncated_list = list(value[:self.max_list_length])
+                truncated_list = list(value[: self.max_list_length])
                 return truncated_list
             return value
 
@@ -136,8 +145,10 @@ class AttributePolicy:
         # Truncation
         if len(value.encode("utf-8", errors="replace")) > self.max_value_bytes:
             # Truncate at character level (approximate) to stay under byte limit
-            truncated = value[:self.max_value_bytes]
-            while len(truncated.encode("utf-8", errors="replace")) > self.max_value_bytes:
+            truncated = value[: self.max_value_bytes]
+            while (
+                len(truncated.encode("utf-8", errors="replace")) > self.max_value_bytes
+            ):
                 truncated = truncated[:-1]
             return truncated + "...[truncated]"
 

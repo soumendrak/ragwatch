@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ragwatch.adapters.base import FrameworkAdapter
 from ragwatch.instrumentation.extractors import TelemetryExtractor
 
 
@@ -80,8 +79,7 @@ class CrewAIAdapter:
         tools = raw_result.get("tools_used")
         if isinstance(tools, list) and tools:
             norm["tool_calls"] = [
-                t if isinstance(t, dict) else {"name": str(t)}
-                for t in tools
+                t if isinstance(t, dict) else {"name": str(t)} for t in tools
             ]
 
         return norm or None

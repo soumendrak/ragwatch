@@ -9,6 +9,7 @@ parameters as the core ``@trace`` — telemetry extraction is entirely
 driven by decorator parameters; no code inside the decorated function
 is required.
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, TypeVar
@@ -49,17 +50,28 @@ def node(
             completeness.
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.AGENT, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")
+        return trace(
+            func,
+            span_kind=SpanKind.AGENT,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
-        return trace(actual_name, span_kind=SpanKind.AGENT,
-                     auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")(fn)
+        return trace(
+            actual_name,
+            span_kind=SpanKind.AGENT,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )(fn)
 
     return decorator  # type: ignore[return-value]
 
@@ -75,17 +87,28 @@ def workflow(
 ) -> F | Callable[[F], F]:
     """Decorate a LangGraph workflow with ``SpanKind.CHAIN``."""
     if callable(func):
-        return trace(func, span_kind=SpanKind.CHAIN, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")
+        return trace(
+            func,
+            span_kind=SpanKind.CHAIN,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
-        return trace(actual_name, span_kind=SpanKind.CHAIN,
-                     auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")(fn)
+        return trace(
+            actual_name,
+            span_kind=SpanKind.CHAIN,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )(fn)
 
     return decorator  # type: ignore[return-value]
 
@@ -111,16 +134,27 @@ def tool(
 
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.TOOL, auto_track_io=auto_track_io,
-                     telemetry=telemetry, result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")
+        return trace(
+            func,
+            span_kind=SpanKind.TOOL,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )
 
     actual_name = func if isinstance(func, str) else span_name
 
     def decorator(fn: F) -> F:
-        return trace(actual_name, span_kind=SpanKind.TOOL,
-                     auto_track_io=auto_track_io, telemetry=telemetry,
-                     result_formatter=result_formatter,
-                     span_hooks=span_hooks, adapter="langgraph")(fn)
+        return trace(
+            actual_name,
+            span_kind=SpanKind.TOOL,
+            auto_track_io=auto_track_io,
+            telemetry=telemetry,
+            result_formatter=result_formatter,
+            span_hooks=span_hooks,
+            adapter="langgraph",
+        )(fn)
 
     return decorator  # type: ignore[return-value]

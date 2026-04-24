@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
-from unittest.mock import MagicMock
 
 import pytest
 from tests.conftest import InMemorySpanExporter
@@ -45,6 +43,7 @@ def _setup():
 # ResultTransformer protocol
 # ---------------------------------------------------------------------------
 
+
 class _UppercaseToolTransformer:
     """Custom transformer that uppercases string results for TOOL spans."""
 
@@ -52,10 +51,10 @@ class _UppercaseToolTransformer:
     def span_kind(self) -> SpanKind:
         return SpanKind.TOOL
 
-    def transform(self, span, args, kwargs, result, result_formatter):
-        if isinstance(result, str):
-            return result.upper()
-        return result
+    def transform(self, context):
+        if isinstance(context.raw_result, str):
+            return context.raw_result.upper()
+        return context.raw_result
 
 
 def test_result_transformer_protocol():
@@ -77,6 +76,7 @@ def test_custom_transformer_overrides_builtin():
 
 def test_no_custom_transformer_uses_builtin():
     """Without a custom transformer, built-in TOOL logic applies."""
+
     @trace("tool-fn", span_kind=SpanKind.TOOL)
     def my_tool():
         return "pass through"
@@ -109,15 +109,16 @@ def test_chain_spans_unaffected_by_tool_transformer():
 # TokenExtractor protocol
 # ---------------------------------------------------------------------------
 
+
 class _CustomTokenExtractor:
     """Token extractor that looks for a 'tokens' key in dict results."""
+
     extracted = False
 
-    def extract(self, span, result):
+    def extract(self, context):
         _CustomTokenExtractor.extracted = False
-        if isinstance(result, dict) and "tokens" in result:
-            from ragwatch.instrumentation.attributes import safe_set_attribute
-            safe_set_attribute(span, "custom.token_count", result["tokens"])
+        if isinstance(context.raw_result, dict) and "tokens" in context.raw_result:
+            context.set_attribute("custom.token_count", context.raw_result["tokens"])
             _CustomTokenExtractor.extracted = True
 
 
@@ -173,6 +174,7 @@ def test_builtin_token_extraction_still_runs(_setup):
 # ---------------------------------------------------------------------------
 # global_auto_track_io
 # ---------------------------------------------------------------------------
+
 
 def test_global_auto_track_io_disables_io(_setup):
     """global_auto_track_io=False disables I/O tracking even when decorator says True."""

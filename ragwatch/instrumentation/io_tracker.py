@@ -33,6 +33,7 @@ def _get_io_policy():
     """Return the active AttributePolicy if it has I/O redaction keys."""
     try:
         from ragwatch import get_active_config
+
         cfg = get_active_config()
         if cfg is not None and cfg.attribute_policy is not None:
             return cfg.attribute_policy

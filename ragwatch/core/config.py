@@ -9,10 +9,7 @@ from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.sdk.trace.sampling import Sampler
 
 if TYPE_CHECKING:
-    from ragwatch.adapters.base import FrameworkAdapter
-    from ragwatch.instrumentation.attribute_policy import AttributePolicy
-    from ragwatch.instrumentation.extractors import TelemetryExtractor
-    from ragwatch.instrumentation.span_hooks import SpanHook
+    pass
 
 
 @dataclass(frozen=True)
@@ -64,13 +61,19 @@ class RAGWatchConfig:
 
     service_name: str = "ragwatch-service"
     exporters: List[SpanExporter] = field(default_factory=list)
-    exporter: Optional[SpanExporter] = None   # legacy single-exporter API
+    exporter: Optional[SpanExporter] = None  # legacy single-exporter API
     max_embedding_dims: int = 512
-    custom_extractors: List[Any] = field(default_factory=list)  # List[TelemetryExtractor]
+    custom_extractors: List[Any] = field(
+        default_factory=list
+    )  # List[TelemetryExtractor]
     global_span_hooks: List[Any] = field(default_factory=list)  # List[SpanHook]
     adapters: List[Any] = field(default_factory=list)  # List[FrameworkAdapter]
-    custom_transformers: List[Any] = field(default_factory=list)  # List[ResultTransformer]
-    custom_token_extractors: List[Any] = field(default_factory=list)  # List[TokenExtractor]
+    custom_transformers: List[Any] = field(
+        default_factory=list
+    )  # List[ResultTransformer]
+    custom_token_extractors: List[Any] = field(
+        default_factory=list
+    )  # List[TokenExtractor]
     attribute_policy: Any = None  # Optional[AttributePolicy]
     sampler: Optional[Sampler] = None
     strict_mode: bool = False

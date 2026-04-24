@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
 
 import pytest
 from tests.conftest import InMemorySpanExporter
 
-from ragwatch import SpanKind, trace
+from ragwatch import trace
 from ragwatch.adapters.base import (
     FrameworkAdapter,
     clear_adapters,
     get_adapter,
     get_all_adapters,
+    get_capabilities,
     register_adapter,
 )
 from ragwatch.adapters.crewai import CrewAIAdapter
@@ -43,6 +43,7 @@ def _setup():
 # FrameworkAdapter Protocol compliance
 # ---------------------------------------------------------------------------
 
+
 def test_langgraph_adapter_is_framework_adapter():
     adapter = LangGraphAdapter()
     assert isinstance(adapter, FrameworkAdapter)
@@ -56,6 +57,7 @@ def test_crewai_adapter_is_framework_adapter():
 # ---------------------------------------------------------------------------
 # LangGraphAdapter
 # ---------------------------------------------------------------------------
+
 
 def test_langgraph_adapter_name():
     assert LangGraphAdapter().name == "langgraph"
@@ -78,12 +80,19 @@ def test_langgraph_default_extractors():
     adapter = LangGraphAdapter()
     extractors = adapter.default_extractors()
     names = {e.name for e in extractors}
-    assert names == {"tool_calls", "routing", "agent_completion", "query_rewrite", "compression"}
+    assert names == {
+        "tool_calls",
+        "routing",
+        "agent_completion",
+        "query_rewrite",
+        "compression",
+    }
 
 
 # ---------------------------------------------------------------------------
 # CrewAIAdapter
 # ---------------------------------------------------------------------------
+
 
 def test_crewai_adapter_name():
     assert CrewAIAdapter().name == "crewai"
@@ -117,6 +126,7 @@ def test_crewai_default_extractors_empty():
 # Adapter registry
 # ---------------------------------------------------------------------------
 
+
 def test_register_and_get_adapter():
     adapter = LangGraphAdapter()
     register_adapter(adapter)
@@ -144,6 +154,7 @@ def test_clear_adapters():
 # Custom adapter
 # ---------------------------------------------------------------------------
 
+
 class _CustomAdapter:
     name = "custom_framework"
 
@@ -164,6 +175,7 @@ def test_custom_adapter_registration():
 # ---------------------------------------------------------------------------
 # Integration: adapters via configure()
 # ---------------------------------------------------------------------------
+
 
 def test_adapter_extractors_registered_via_configure(_setup):
     """Adapter's default_extractors get registered in the registry."""
@@ -186,8 +198,10 @@ def test_adapter_extractors_registered_via_configure(_setup):
 # Runtime wiring: adapter.extract_state() called by extract_all()
 # ---------------------------------------------------------------------------
 
+
 class _KwargsStateAdapter:
     """Adapter that extracts state from kwargs['state']."""
+
     name = "kwargs_state"
 
     def extract_state(self, args, kwargs):
@@ -199,11 +213,12 @@ class _KwargsStateAdapter:
 
 class _StateCapturingExtractor:
     """Extractor that records the state it received."""
+
     name = "state_capture"
     captured_state = None
 
-    def extract(self, span, span_name, args, result, state):
-        _StateCapturingExtractor.captured_state = state
+    def extract(self, context):
+        _StateCapturingExtractor.captured_state = context.state
 
 
 def test_extract_all_uses_adapter_extract_state():
@@ -218,38 +233,46 @@ def test_extract_all_uses_adapter_extract_state():
 
     # The state is in kwargs, NOT in positional args
     from opentelemetry import trace as otel_trace
+
     tracer = otel_trace.get_tracer("test")
     with tracer.start_as_current_span("test") as span:
         reg.extract_all(
-            ["state_capture"], span, "test_span",
+            ["state_capture"],
+            span,
+            "test_span",
             args=("not_a_dict",),
             result={},
             kwargs={"state": {"my_key": "my_value"}},
             adapter=adapter,
+            context=type(
+                "Ctx",
+                (),
+                {"state": adapter.extract_state((), {"state": {"my_key": "my_value"}})},
+            )(),
         )
 
     assert _StateCapturingExtractor.captured_state == {"my_key": "my_value"}
 
 
-def test_extract_all_fallback_without_adapter():
-    """Without an adapter, extract_all() falls back to first dict in args."""
+def test_extract_all_requires_context():
+    """Extractor dispatch now requires InstrumentationContext."""
     extractor = _StateCapturingExtractor()
     _StateCapturingExtractor.captured_state = None
 
     reg = get_default_registry()
     reg.register(extractor)
-
-    state_dict = {"legacy": True}
     from opentelemetry import trace as otel_trace
+
     tracer = otel_trace.get_tracer("test")
     with tracer.start_as_current_span("test") as span:
-        reg.extract_all(
-            ["state_capture"], span, "test_span",
-            args=(state_dict,),
-            result={},
-        )
-
-    assert _StateCapturingExtractor.captured_state is state_dict
+        with pytest.raises(ValueError, match="requires context"):
+            reg.extract_all(
+                ["state_capture"],
+                span,
+                "test_span",
+                args=({"legacy": True},),
+                result={},
+            )
 
 
 def test_trace_decorator_adapter_param(_setup):
@@ -267,13 +290,6 @@ def test_trace_decorator_adapter_param(_setup):
     my_fn("hello", state={"from_kwarg": True})
 
     assert _StateCapturingExtractor.captured_state == {"from_kwarg": True}
-
-
-# ---------------------------------------------------------------------------
-# Adapter capabilities
-# ---------------------------------------------------------------------------
-
-from ragwatch.adapters.base import get_capabilities
 
 
 def test_langgraph_capabilities():
@@ -301,12 +317,16 @@ def test_custom_adapter_without_capabilities():
 
 def test_custom_adapter_with_capabilities():
     """Adapters with capabilities() return their declared set."""
+
     class _CapableAdapter:
         name = "capable"
+
         def extract_state(self, args, kwargs):
             return None
+
         def default_extractors(self):
             return []
+
         def capabilities(self):
             return {"custom_cap", "another_cap"}
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import weakref
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from opentelemetry import trace as otel_trace
 
@@ -35,6 +35,7 @@ def _get_active_policy():
     """Return the active AttributePolicy from the SDK config, or None."""
     try:
         from ragwatch import get_active_config
+
         cfg = get_active_config()
         return cfg.attribute_policy if cfg is not None else None
     except Exception:
@@ -45,6 +46,7 @@ def _is_strict_mode() -> bool:
     """Check if the SDK is in strict mode."""
     try:
         from ragwatch import get_active_config
+
         cfg = get_active_config()
         return cfg.strict_mode if cfg is not None else False
     except Exception:
@@ -91,16 +93,20 @@ def safe_set_attribute(
             if idx >= resolved_policy.max_indexed_attributes:
                 _logger.debug(
                     "Indexed attribute %r exceeds max_indexed_attributes=%d, skipped",
-                    key, resolved_policy.max_indexed_attributes,
+                    key,
+                    resolved_policy.max_indexed_attributes,
                 )
                 # Record event only once per prefix to avoid spam
                 seen: Set = _span_indexed_counts.setdefault(span, set())
                 if prefix not in seen:
                     seen.add(prefix)
-                    span.add_event("ragwatch.indexed_attr_limit", {
-                        "prefix": prefix,
-                        "limit": resolved_policy.max_indexed_attributes,
-                    })
+                    span.add_event(
+                        "ragwatch.indexed_attr_limit",
+                        {
+                            "prefix": prefix,
+                            "limit": resolved_policy.max_indexed_attributes,
+                        },
+                    )
                 return
 
         value = resolved_policy.apply(key, value)

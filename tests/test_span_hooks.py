@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 from tests.conftest import InMemorySpanExporter
 
-from ragwatch import SpanKind, trace
+from ragwatch import trace
 from ragwatch.core.config import RAGWatchConfig
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.instrumentation.span_hooks import (
@@ -33,6 +32,7 @@ def _setup():
 # Local hooks (per-decorator)
 # ---------------------------------------------------------------------------
 
+
 class _RecordingHook:
     """Hook that records calls for assertion."""
 
@@ -40,15 +40,14 @@ class _RecordingHook:
         self.starts: list[tuple] = []
         self.ends: list[tuple] = []
 
-    def on_start(self, span, args, kwargs):
+    def on_start(self, span, args, kwargs, *, context=None):
         self.starts.append((span.name, args, kwargs))
 
-    def on_end(self, span, result):
+    def on_end(self, span, result, *, context=None):
         self.ends.append((span.name, result))
 
 
 def test_local_hook_on_start_and_on_end(_setup):
-    exporter = _setup
     hook = _RecordingHook()
 
     @trace("hooked-fn", span_hooks=[hook])
@@ -97,14 +96,15 @@ def test_multiple_local_hooks(_setup):
 # Local hook sets custom attributes
 # ---------------------------------------------------------------------------
 
+
 class _AttributeHook:
     """Adds custom attributes at start and end."""
 
-    def on_start(self, span, args, kwargs):
-        span.set_attribute("custom.hook.started", True)
+    def on_start(self, span, args, kwargs, *, context=None):
+        context.set_attribute("custom.hook.started", True)
 
-    def on_end(self, span, result):
-        span.set_attribute("custom.hook.result_type", type(result).__name__)
+    def on_end(self, span, result, *, context=None):
+        context.set_attribute("custom.hook.result_type", type(result).__name__)
 
 
 def test_local_hook_sets_span_attributes(_setup):
@@ -125,8 +125,8 @@ def test_local_hook_sets_span_attributes(_setup):
 # Global hooks
 # ---------------------------------------------------------------------------
 
+
 def test_global_hook_runs_on_all_spans(_setup):
-    exporter = _setup
     hook = _RecordingHook()
     register_global_hook(hook)
 
@@ -147,7 +147,6 @@ def test_global_hook_runs_on_all_spans(_setup):
 
 
 def test_global_and_local_hooks_both_run(_setup):
-    exporter = _setup
     global_hook = _RecordingHook()
     local_hook = _RecordingHook()
     register_global_hook(global_hook)
@@ -183,9 +182,9 @@ def test_clear_global_hooks():
 # Async support
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_local_hook_async(_setup):
-    exporter = _setup
     hook = _RecordingHook()
 
     @trace("async-hooked", span_hooks=[hook])
@@ -202,8 +201,9 @@ async def test_local_hook_async(_setup):
 
 
 # ---------------------------------------------------------------------------
-# No hooks (backward compat)
+# No hooks
 # ---------------------------------------------------------------------------
+
 
 def test_no_hooks_still_works(_setup):
     exporter = _setup

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
 
 import pytest
 from tests.conftest import InMemorySpanExporter
 
 import ragwatch
 from ragwatch import SpanKind, trace
-from ragwatch.adapters.base import clear_adapters, register_adapter
+from ragwatch.adapters.base import clear_adapters
 from ragwatch.core.config import RAGWatchConfig
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.instrumentation.extractors import (
@@ -41,24 +40,26 @@ def _setup():
 # Broken hook does not crash user code
 # ---------------------------------------------------------------------------
 
+
 class _BrokenStartHook:
-    def on_start(self, span, args, kwargs):
+    def on_start(self, span, args, kwargs, *, context=None):
         raise RuntimeError("hook start exploded")
 
-    def on_end(self, span, result):
+    def on_end(self, span, result, *, context=None):
         pass
 
 
 class _BrokenEndHook:
-    def on_start(self, span, args, kwargs):
+    def on_start(self, span, args, kwargs, *, context=None):
         pass
 
-    def on_end(self, span, result):
+    def on_end(self, span, result, *, context=None):
         raise RuntimeError("hook end exploded")
 
 
 def test_broken_on_start_hook_does_not_crash():
     """A broken on_start hook should not prevent the function from running."""
+
     @trace("test-fn", span_hooks=[_BrokenStartHook()])
     def my_fn():
         return 42
@@ -69,6 +70,7 @@ def test_broken_on_start_hook_does_not_crash():
 
 def test_broken_on_end_hook_does_not_crash():
     """A broken on_end hook should not prevent the function from returning."""
+
     @trace("test-fn", span_hooks=[_BrokenEndHook()])
     def my_fn():
         return 42
@@ -111,10 +113,11 @@ def test_broken_hook_records_error_event(_setup):
 # Broken extractor does not crash user code
 # ---------------------------------------------------------------------------
 
+
 class _BrokenExtractor:
     name = "broken_ext"
 
-    def extract(self, span, span_name, args, result, state):
+    def extract(self, context):
         raise RuntimeError("extractor exploded")
 
 
@@ -153,6 +156,7 @@ def test_broken_extractor_records_error_event(_setup):
 # Broken result transformer does not crash user code
 # ---------------------------------------------------------------------------
 
+
 def _bad_formatter(result):
     raise RuntimeError("formatter exploded")
 
@@ -190,6 +194,7 @@ def test_broken_result_formatter_records_error_event(_setup):
 # ---------------------------------------------------------------------------
 # strict_mode re-raises extension exceptions
 # ---------------------------------------------------------------------------
+
 
 def test_strict_mode_reraises_hook_error():
     """In strict_mode, broken hooks re-raise instead of swallowing."""
@@ -232,9 +237,11 @@ def test_strict_mode_reraises_formatter_error():
 # Async variants
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_broken_hook_does_not_crash_async():
     """Broken hook in async context should not crash."""
+
     @trace("test-fn", span_hooks=[_BrokenStartHook()])
     async def my_fn():
         return 42

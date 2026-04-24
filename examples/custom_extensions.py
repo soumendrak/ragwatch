@@ -1,8 +1,7 @@
 """RAGWatch Custom Extensions — context-first extension points.
 
-This example demonstrates all extension points using the **canonical
-context-first** pattern.  Legacy signatures are still supported but
-context-first is recommended for new code.
+This example demonstrates all extension points using the canonical
+`InstrumentationContext` pattern.
 
 Extension points shown:
 
@@ -27,18 +26,16 @@ from ragwatch import (
     get_default_registry,
     trace,
 )
-from ragwatch.instrumentation.result_transformers import (
-    get_default_transformer_registry,
-)
-from ragwatch.instrumentation.token_usage import register_token_extractor
 
 # ── 1. Custom TelemetryExtractor (context-first) ─────────────────────────
 #
 # Context-first extractors receive a single InstrumentationContext argument.
 # Use context.set_attribute() for policy-enforced writes.
 
+
 class LatencyExtractor:
     """Extract latency from result dicts and record as a span attribute."""
+
     name = "latency"
 
     def extract(self, context: InstrumentationContext) -> None:
@@ -51,6 +48,7 @@ class LatencyExtractor:
 #
 # Hooks accept an optional context= keyword argument.  When present it
 # provides access to span, state, adapter, and the set_attribute writer.
+
 
 class AuditHook:
     """Records the function name and catches errors via on_error."""
@@ -74,6 +72,7 @@ class AuditHook:
 # Context-first transformers receive InstrumentationContext and return the
 # transformed result.  The raw result is in context.raw_result.
 
+
 class JsonToolTransformer:
     """Transform TOOL results to JSON strings instead of the built-in format."""
 
@@ -83,6 +82,7 @@ class JsonToolTransformer:
 
     def transform(self, context: InstrumentationContext):
         import json
+
         raw = context.raw_result
         if isinstance(raw, (dict, list)):
             return json.dumps(raw, default=str)
@@ -93,38 +93,52 @@ class JsonToolTransformer:
 #
 # Context-first token extractors receive InstrumentationContext.
 
+
 class AnthropicTokenExtractor:
     """Extract token usage from Anthropic-style response objects."""
 
     def extract(self, context: InstrumentationContext) -> None:
         usage = getattr(context.raw_result, "usage", None)
         if isinstance(usage, dict):
-            context.set_attribute("llm.token_count.prompt",
-                                  usage.get("input_tokens", 0))
-            context.set_attribute("llm.token_count.completion",
-                                  usage.get("output_tokens", 0))
+            context.set_attribute(
+                "llm.token_count.prompt", usage.get("input_tokens", 0)
+            )
+            context.set_attribute(
+                "llm.token_count.completion", usage.get("output_tokens", 0)
+            )
 
 
 # ── 5. Wire everything together ──────────────────────────────────────────
 
+
 def main():
     # Configure with policy and hooks
-    configure(RAGWatchConfig(
-        service_name="custom-extensions-demo",
-        attribute_policy=AttributePolicy(
-            max_value_bytes=1024,
-            max_indexed_attributes=20,
-            redact_keys=["password", "secret", "api_key"],
-            redact_patterns=[r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"],
-            # I/O privacy: these keys are scrubbed from captured input/output
-            redact_io_keys=["password", "secret", "api_key", "token", "authorization"],
-        ),
-        global_span_hooks=[AuditHook()],
-        custom_transformers=[JsonToolTransformer()],
-        custom_token_extractors=[AnthropicTokenExtractor()],
-        strict_mode=False,         # swallow extension errors in prod
-        global_auto_track_io=True, # auto-capture I/O
-    ))
+    configure(
+        RAGWatchConfig(
+            service_name="custom-extensions-demo",
+            attribute_policy=AttributePolicy(
+                max_value_bytes=1024,
+                max_indexed_attributes=20,
+                redact_keys=["password", "secret", "api_key"],
+                redact_patterns=[
+                    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
+                ],
+                # I/O privacy: these keys are scrubbed from captured input/output
+                redact_io_keys=[
+                    "password",
+                    "secret",
+                    "api_key",
+                    "token",
+                    "authorization",
+                ],
+            ),
+            global_span_hooks=[AuditHook()],
+            custom_transformers=[JsonToolTransformer()],
+            custom_token_extractors=[AnthropicTokenExtractor()],
+            strict_mode=False,  # swallow extension errors in prod
+            global_auto_track_io=True,  # auto-capture I/O
+        )
+    )
 
     # Register custom extractor
     get_default_registry().register(LatencyExtractor())

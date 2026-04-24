@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 from tests.conftest import InMemorySpanExporter
@@ -33,12 +32,16 @@ def _setup():
 # InstrumentationContext dataclass basics
 # ---------------------------------------------------------------------------
 
+
 def test_context_default_fields():
     """InstrumentationContext fields have correct defaults."""
     from unittest.mock import MagicMock
+
     span = MagicMock()
     ctx = InstrumentationContext(
-        span=span, span_name="test", span_kind=SpanKind.CHAIN,
+        span=span,
+        span_name="test",
+        span_kind=SpanKind.CHAIN,
         func_name="my_func",
     )
     assert ctx.args == ()
@@ -53,9 +56,12 @@ def test_context_default_fields():
 def test_context_mutable_fields():
     """InstrumentationContext fields can be updated incrementally."""
     from unittest.mock import MagicMock
+
     span = MagicMock()
     ctx = InstrumentationContext(
-        span=span, span_name="test", span_kind=SpanKind.CHAIN,
+        span=span,
+        span_name="test",
+        span_kind=SpanKind.CHAIN,
         func_name="my_func",
     )
     ctx.raw_result = {"data": 1}
@@ -70,8 +76,10 @@ def test_context_mutable_fields():
 # Hook receives context when it accepts it
 # ---------------------------------------------------------------------------
 
+
 class _ContextCapturingHook:
     """Hook that captures the InstrumentationContext."""
+
     start_ctx = None
     end_ctx = None
 
@@ -107,39 +115,41 @@ def test_hook_receives_context():
     assert end_ctx.raw_result == 11
 
 
-def test_hook_without_context_still_works():
-    """Old-style hooks without context= parameter still work."""
+def test_hook_context_contract_required():
+    """Hooks use context= as the canonical extension contract."""
     calls = []
 
-    class _OldStyleHook:
-        def on_start(self, span, args, kwargs):
-            calls.append("start")
+    class _ContextHook:
+        def on_start(self, span, args, kwargs, *, context=None):
+            calls.append(("start", context.span_name))
 
-        def on_end(self, span, result):
-            calls.append("end")
+        def on_end(self, span, result, *, context=None):
+            calls.append(("end", context.result))
 
-    @trace("old-hook-test", span_hooks=[_OldStyleHook()])
+    @trace("context-hook-test", span_hooks=[_ContextHook()])
     def my_fn():
         return 42
 
     result = my_fn()
     assert result == 42
-    assert calls == ["start", "end"]
+    assert calls == [("start", "context-hook-test"), ("end", 42)]
 
 
 # ---------------------------------------------------------------------------
 # on_error hook pathway
 # ---------------------------------------------------------------------------
 
+
 class _ErrorCapturingHook:
     """Hook that captures on_error calls."""
+
     error_ctx = None
     error_exc = None
 
-    def on_start(self, span, args, kwargs):
+    def on_start(self, span, args, kwargs, *, context=None):
         pass
 
-    def on_end(self, span, result):
+    def on_end(self, span, result, *, context=None):
         pass
 
     def on_error(self, span, exception, *, context=None):
@@ -202,11 +212,12 @@ def test_on_error_global_hook():
 
 def test_hooks_without_on_error_are_skipped():
     """Hooks that don't define on_error are silently skipped."""
+
     class _NoErrorHook:
-        def on_start(self, span, args, kwargs):
+        def on_start(self, span, args, kwargs, *, context=None):
             pass
 
-        def on_end(self, span, result):
+        def on_end(self, span, result, *, context=None):
             pass
 
     @trace("skip-on-error-test", span_hooks=[_NoErrorHook()])
@@ -220,6 +231,7 @@ def test_hooks_without_on_error_are_skipped():
 # ---------------------------------------------------------------------------
 # Async variants
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_hook_receives_context_async():
@@ -265,6 +277,7 @@ async def test_on_error_called_async():
 # ctx.state is populated from first dict arg (legacy convention)
 # ---------------------------------------------------------------------------
 
+
 def test_context_state_populated_from_dict_arg():
     """ctx.state should be auto-populated from first dict positional arg."""
     _ContextCapturingHook.start_ctx = None
@@ -301,8 +314,10 @@ def test_context_state_populated_via_adapter():
 
     class _KwargsAdapter:
         name = "test_kwargs"
+
         def extract_state(self, args, kwargs):
             return kwargs.get("my_state")
+
         def default_extractors(self):
             return []
 
@@ -310,7 +325,11 @@ def test_context_state_populated_via_adapter():
     register_adapter(_KwargsAdapter())
     _ContextCapturingHook.start_ctx = None
 
-    @trace("adapter-state-test", span_hooks=[_ContextCapturingHook()], adapter="test_kwargs")
+    @trace(
+        "adapter-state-test",
+        span_hooks=[_ContextCapturingHook()],
+        adapter="test_kwargs",
+    )
     def my_fn(x, my_state=None):
         return x
 
@@ -325,6 +344,7 @@ def test_context_state_populated_via_adapter():
 # ---------------------------------------------------------------------------
 # ctx.set_attribute() — policy-enforced writer
 # ---------------------------------------------------------------------------
+
 
 def test_context_set_attribute(_setup):
     """ctx.set_attribute() should delegate to safe_set_attribute."""
@@ -362,7 +382,7 @@ def test_context_set_attribute_respects_policy(_setup):
             context.set_attribute("api.secret", "my_token_123")
             context.set_attribute("api.name", "visible")
 
-        def on_end(self, span, result):
+        def on_end(self, span, result, *, context=None):
             pass
 
     @trace("policy-test", span_hooks=[_SecretHook()])

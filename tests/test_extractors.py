@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,12 +11,7 @@ from ragwatch import SpanKind, trace
 from ragwatch.core.config import RAGWatchConfig
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.instrumentation.extractors import (
-    AgentCompletionExtractor,
-    CompressionExtractor,
     ExtractorRegistry,
-    QueryRewriteExtractor,
-    RoutingExtractor,
-    ToolCallsExtractor,
     get_default_registry,
     reset_default_registry,
 )
@@ -39,11 +33,12 @@ def _setup():
 # ExtractorRegistry basics
 # ---------------------------------------------------------------------------
 
+
 class _DummyExtractor:
     name = "dummy"
 
-    def extract(self, span, span_name, args, result, state):
-        span.set_attribute("custom.dummy", "hello")
+    def extract(self, context):
+        context.span.set_attribute("custom.dummy", "hello")
 
 
 def test_registry_register_and_get():
@@ -71,8 +66,9 @@ def test_registry_extract_all_skips_unknown():
     reg = ExtractorRegistry()
     reg.register(_DummyExtractor())
     span = MagicMock()
+    context = MagicMock(span=span)
     # Should not raise even though "unknown" is not registered
-    reg.extract_all(["dummy", "unknown"], span, "test", (), {})
+    reg.extract_all(["dummy", "unknown"], span, "test", (), {}, context=context)
     span.set_attribute.assert_called_once_with("custom.dummy", "hello")
 
 
@@ -80,9 +76,16 @@ def test_registry_extract_all_skips_unknown():
 # Default registry has all 5 built-ins
 # ---------------------------------------------------------------------------
 
+
 def test_default_registry_has_builtins():
     reg = get_default_registry()
-    expected = {"tool_calls", "routing", "agent_completion", "query_rewrite", "compression"}
+    expected = {
+        "tool_calls",
+        "routing",
+        "agent_completion",
+        "query_rewrite",
+        "compression",
+    }
     assert expected == set(reg.names())
 
 
@@ -90,15 +93,21 @@ def test_default_registry_has_builtins():
 # Custom extractor via @trace(telemetry=[...])
 # ---------------------------------------------------------------------------
 
+
 def test_custom_extractor_via_trace(_setup):
     exporter = _setup
 
     class LatencyExtractor:
         name = "latency"
 
-        def extract(self, span, span_name, args, result, state):
-            if isinstance(result, dict) and "latency_ms" in result:
-                span.set_attribute("custom.latency_ms", result["latency_ms"])
+        def extract(self, context):
+            if (
+                isinstance(context.raw_result, dict)
+                and "latency_ms" in context.raw_result
+            ):
+                context.set_attribute(
+                    "custom.latency_ms", context.raw_result["latency_ms"]
+                )
 
     get_default_registry().register(LatencyExtractor())
 
@@ -116,15 +125,19 @@ def test_custom_extractor_via_trace(_setup):
 # Custom extractor via configure(custom_extractors=[...])
 # ---------------------------------------------------------------------------
 
+
 def test_custom_extractor_via_configure(_setup):
     exporter = _setup
 
     class CostExtractor:
         name = "cost"
 
-        def extract(self, span, span_name, args, result, state):
-            if isinstance(result, dict) and "cost_usd" in result:
-                span.set_attribute("custom.cost_usd", result["cost_usd"])
+        def extract(self, context):
+            if (
+                isinstance(context.raw_result, dict)
+                and "cost_usd" in context.raw_result
+            ):
+                context.set_attribute("custom.cost_usd", context.raw_result["cost_usd"])
 
     # Simulate what configure(custom_extractors=[...]) does
     get_default_registry().register(CostExtractor())
@@ -142,6 +155,7 @@ def test_custom_extractor_via_configure(_setup):
 # ---------------------------------------------------------------------------
 # Built-in extractor: ToolCallsExtractor
 # ---------------------------------------------------------------------------
+
 
 def test_tool_calls_extractor(_setup):
     exporter = _setup
@@ -163,6 +177,7 @@ def test_tool_calls_extractor(_setup):
 # ---------------------------------------------------------------------------
 # Built-in extractor: RoutingExtractor
 # ---------------------------------------------------------------------------
+
 
 def test_routing_extractor_with_tool_calls(_setup):
     exporter = _setup
@@ -198,6 +213,7 @@ def test_routing_extractor_no_tool_calls(_setup):
 # Built-in extractor: AgentCompletionExtractor
 # ---------------------------------------------------------------------------
 
+
 def test_agent_completion_extractor_success(_setup):
     exporter = _setup
 
@@ -231,6 +247,7 @@ def test_agent_completion_extractor_fallback(_setup):
 # Built-in extractor: QueryRewriteExtractor
 # ---------------------------------------------------------------------------
 
+
 def test_query_rewrite_extractor(_setup):
     exporter = _setup
 
@@ -254,6 +271,7 @@ def test_query_rewrite_extractor(_setup):
 # Built-in extractor: CompressionExtractor
 # ---------------------------------------------------------------------------
 
+
 def test_compression_extractor(_setup):
     exporter = _setup
 
@@ -276,6 +294,7 @@ def test_compression_extractor(_setup):
 # Extractor overwrite
 # ---------------------------------------------------------------------------
 
+
 def test_register_overwrites_existing():
     reg = ExtractorRegistry()
     ext1 = _DummyExtractor()
@@ -289,8 +308,10 @@ def test_register_overwrites_existing():
 # Context-first extractor contract
 # ---------------------------------------------------------------------------
 
+
 class _ContextFirstExtractor:
     """New-style extractor that receives InstrumentationContext."""
+
     name = "ctx_extractor"
     captured_ctx = None
 
@@ -321,22 +342,23 @@ def test_context_first_extractor_receives_context(_setup):
     assert span.attributes["custom.ctx_extractor"] == "from_context"
 
 
-def test_legacy_extractor_still_works_alongside_context(_setup):
-    """Old-style extractors with (span, span_name, args, result, state) still work."""
+def test_custom_extractor_uses_context_writer(_setup):
+    """Custom extractors use InstrumentationContext as their contract."""
     exporter = _setup
 
-    class _LegacyExt:
-        name = "legacy_ext"
-        def extract(self, span, span_name, args, result, state):
-            span.set_attribute("custom.legacy", "works")
+    class _CustomExt:
+        name = "custom_ext"
 
-    get_default_registry().register(_LegacyExt())
+        def extract(self, context):
+            context.set_attribute("custom.context_contract", "works")
 
-    @trace("legacy-test", span_kind=SpanKind.AGENT, telemetry=["legacy_ext"])
+    get_default_registry().register(_CustomExt())
+
+    @trace("custom-test", span_kind=SpanKind.AGENT, telemetry=["custom_ext"])
     def my_node(state):
         return {"data": True}
 
     my_node({"key": "val"})
 
-    span = next(s for s in exporter.get_finished_spans() if s.name == "legacy-test")
-    assert span.attributes["custom.legacy"] == "works"
+    span = next(s for s in exporter.get_finished_spans() if s.name == "custom-test")
+    assert span.attributes["custom.context_contract"] == "works"

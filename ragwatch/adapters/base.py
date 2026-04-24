@@ -100,7 +100,6 @@ class FrameworkAdapter(Protocol):
         ...
 
 
-
 def get_capabilities(adapter: FrameworkAdapter) -> set:
     """Return the capabilities of an adapter, or empty set if not declared.
 

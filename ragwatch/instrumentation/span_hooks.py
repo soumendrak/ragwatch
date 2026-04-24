@@ -30,7 +30,6 @@ redaction, naming validation).
 
 from __future__ import annotations
 
-import inspect
 import logging
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
@@ -43,6 +42,7 @@ def _is_strict_mode() -> bool:
     """Check if the SDK is in strict mode (re-raise extension errors)."""
     try:
         from ragwatch import get_active_config
+
         cfg = get_active_config()
         return cfg.strict_mode if cfg is not None else False
     except Exception:
@@ -56,10 +56,8 @@ class SpanHook(Protocol):
     Implementors may define ``on_start``, ``on_end``, and/or ``on_error``
     to enrich spans with custom attributes, events, or side-effects.
 
-    Both context-aware and legacy signatures are supported — the dispatch
-    auto-detects whether your hook accepts a ``context=`` keyword argument.
-
-    **Canonical (context-first — recommended):**
+    Hooks receive the current ``InstrumentationContext`` as a keyword-only
+    ``context`` argument.
 
     .. code-block:: python
 
@@ -72,17 +70,6 @@ class SpanHook(Protocol):
 
             def on_error(self, span, exception, *, context=None):
                 context.set_attribute("custom.error", str(exception))
-
-    **Legacy (still supported):**
-
-    .. code-block:: python
-
-        class MyHook:
-            def on_start(self, span, args, kwargs):
-                span.set_attribute("custom.start", True)
-
-            def on_end(self, span, result):
-                pass
 
     The ``context`` parameter is an
     :class:`~ragwatch.instrumentation.context_model.InstrumentationContext`
@@ -132,15 +119,6 @@ def clear_global_hooks() -> None:
     _GLOBAL_HOOKS.clear()
 
 
-def _accepts_context(method: Any) -> bool:
-    """Return True if *method* accepts a ``context`` keyword argument."""
-    try:
-        sig = inspect.signature(method)
-        return "context" in sig.parameters
-    except (ValueError, TypeError):
-        return False
-
-
 def _run_hooks(
     hooks: List[Any],
     method_name: str,
@@ -156,16 +134,17 @@ def _run_hooks(
         if method is None:
             continue
         try:
-            if context is not None and _accepts_context(method):
-                method(*positional_args, context=context)
-            else:
-                method(*positional_args)
+            method(*positional_args, context=context)
         except Exception as exc:
             _logger.warning("SpanHook.%s failed: %s", method_name, exc)
-            span.add_event("ragwatch.hook_error", {
-                "hook": type(hook).__name__, "method": method_name,
-                "error": str(exc),
-            })
+            span.add_event(
+                "ragwatch.hook_error",
+                {
+                    "hook": type(hook).__name__,
+                    "method": method_name,
+                    "error": str(exc),
+                },
+            )
             if strict:
                 raise
 

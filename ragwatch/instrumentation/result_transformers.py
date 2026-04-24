@@ -7,33 +7,16 @@ public surface remains ``@trace(result_formatter=...)``.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
 
 from ragwatch.core.span_kinds import SpanKind
 from ragwatch.instrumentation.attributes import safe_set_attribute
 
 
-def _accepts_context_transform(method: Any) -> bool:
-    """Return True if *method* accepts a single ``context`` positional arg."""
-    try:
-        sig = inspect.signature(method)
-        params = [
-            p for p in sig.parameters.values()
-            if p.name != "self" and p.default is inspect.Parameter.empty
-            and p.kind in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            )
-        ]
-        return len(params) == 1 and params[0].name == "context"
-    except (ValueError, TypeError):
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Protocol + Registry
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class ResultTransformer(Protocol):
@@ -42,10 +25,7 @@ class ResultTransformer(Protocol):
     Implementors provide a ``span_kind`` they handle and a ``transform``
     method that converts the raw result into whatever the caller expects.
 
-    Two signatures are supported — the dispatch auto-detects which one
-    your transformer implements.
-
-    **Canonical (context-first — recommended):**
+    Transformers receive the current ``InstrumentationContext``.
 
     .. code-block:: python
 
@@ -59,17 +39,6 @@ class ResultTransformer(Protocol):
                 context.set_attribute("custom.key", "val")
                 return str(raw)
 
-    **Legacy (still supported):**
-
-    .. code-block:: python
-
-        class MyTransformer:
-            @property
-            def span_kind(self) -> SpanKind:
-                return SpanKind.TOOL
-
-            def transform(self, span, args, kwargs, result, result_formatter) -> Any:
-                return str(result)
     """
 
     @property
@@ -77,8 +46,8 @@ class ResultTransformer(Protocol):
         """The span kind this transformer handles."""
         ...
 
-    def transform(self, *args: Any, **kwargs: Any) -> Any:
-        """Transform result — see class docstring for supported signatures."""
+    def transform(self, context: Any) -> Any:
+        """Transform the raw result from an instrumentation context."""
         ...
 
 
@@ -114,6 +83,7 @@ def reset_default_transformer_registry() -> None:
 # Core transform dispatch
 # ---------------------------------------------------------------------------
 
+
 def transform_result(
     span: Any,
     span_kind: SpanKind,
@@ -137,9 +107,9 @@ def transform_result(
     # Check for user-registered custom transformer first
     custom = _DEFAULT_TRANSFORMER_REGISTRY.get(span_kind)
     if custom is not None:
-        if context is not None and _accepts_context_transform(custom.transform):
-            return custom.transform(context)
-        return custom.transform(span, args, kwargs, result, result_formatter)
+        if context is None:
+            raise ValueError("custom result transformers require context")
+        return custom.transform(context)
 
     if span_kind is SpanKind.RETRIEVER:
         return _handle_retriever_result(span, args, kwargs, result, result_formatter)
@@ -150,7 +120,10 @@ def transform_result(
 
 
 def _handle_retriever_result(
-    span: Any, args: tuple, kwargs: dict, result: Any,
+    span: Any,
+    args: tuple,
+    kwargs: dict,
+    result: Any,
     result_formatter: Optional[Callable],
 ) -> Any:
     """Auto-record chunks when result is a raw ``[(Document, score)]`` list."""
@@ -181,7 +154,9 @@ def _handle_retriever_result(
 
 
 def _handle_tool_result(
-    span: Any, result: Any, result_formatter: Optional[Callable],
+    span: Any,
+    result: Any,
+    result_formatter: Optional[Callable],
 ) -> Any:
     """Auto-record parent-chunk attributes from raw dict / list-of-dict results.
 
@@ -199,8 +174,12 @@ def _handle_tool_result(
             f"Content: {result.get('content', '').strip()}"
         )
 
-    if (isinstance(result, list) and result
-            and isinstance(result[0], dict) and "parent_id" in result[0]):
+    if (
+        isinstance(result, list)
+        and result
+        and isinstance(result[0], dict)
+        and "parent_id" in result[0]
+    ):
         _record_parent_chunk_attrs(span, result)
         if result_formatter is not None:
             return result_formatter(result)
@@ -226,15 +205,23 @@ def _record_parent_chunk_attrs(span: Any, docs: list) -> None:
         content = doc.get("content", "").strip()
         pfx = f"retrieval.parent.{i}"
         safe_set_attribute(span, f"{pfx}.parent_id", str(doc.get("parent_id", "")))
-        safe_set_attribute(span, f"{pfx}.source",
-                           str(doc.get("metadata", {}).get("source", "")))
+        safe_set_attribute(
+            span, f"{pfx}.source", str(doc.get("metadata", {}).get("source", ""))
+        )
         safe_set_attribute(span, f"{pfx}.char_count", len(content))
-        safe_set_attribute(span, f"{pfx}.content",
-                           content[:600] + (" …[truncated]" if len(content) > 600 else ""))
+        safe_set_attribute(
+            span,
+            f"{pfx}.content",
+            content[:600] + (" …[truncated]" if len(content) > 600 else ""),
+        )
 
 
 def _is_raw_retrieval(result: Any) -> bool:
     """True if result looks like ``[(Document, float)]``."""
-    return (isinstance(result, list) and bool(result)
-            and isinstance(result[0], tuple) and len(result[0]) == 2
-            and isinstance(result[0][1], (int, float)))
+    return (
+        isinstance(result, list)
+        and bool(result)
+        and isinstance(result[0], tuple)
+        and len(result[0]) == 2
+        and isinstance(result[0][1], (int, float))
+    )

@@ -19,6 +19,7 @@
 | [Configuration](configuration.md) | `RAGWatchConfig`, `AttributePolicy`, strict mode, auto I/O tracking |
 | [Extension Guide](EXTENSION_GUIDE.md) | Full guide to all extension protocols and adapter contracts |
 | [API Reference](api-reference.md) | Complete public API surface |
+| [Roadmap](roadmap.md) | Planned runtime, schema, and adapter work |
 
 ---
 

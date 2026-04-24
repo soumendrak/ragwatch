@@ -6,6 +6,7 @@ import pytest
 from tests.conftest import InMemorySpanExporter
 
 from ragwatch.adapters.langgraph import node, workflow
+from ragwatch.adapters.base import clear_adapters, get_adapter
 from ragwatch.core.config import RAGWatchConfig
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.instrumentation.semconv import (
@@ -60,6 +61,18 @@ def test_node_with_name(_setup):
 
     retriever({})
     assert any(s.name == "custom-retriever" for s in exporter.get_finished_spans())
+
+
+def test_node_auto_registers_builtin_adapter(_setup):
+    clear_adapters()
+
+    @node("auto-adapter")
+    def my_node(state):
+        return state
+
+    my_node({"query": "hello"})
+
+    assert get_adapter("langgraph") is not None
 
 
 def test_workflow_decorator_creates_span(_setup):

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ragwatch.adapters.base import FrameworkAdapter
 from ragwatch.instrumentation.extractors import (
     AgentCompletionExtractor,
     CompressionExtractor,
@@ -50,12 +49,18 @@ class LangGraphAdapter:
     def capabilities(self) -> set:
         """LangGraph supports all core telemetry capabilities."""
         return {
-            "routing", "tool_calls", "agent_completion",
-            "query_rewrite", "compression", "message_history",
+            "routing",
+            "tool_calls",
+            "agent_completion",
+            "query_rewrite",
+            "compression",
+            "message_history",
         }
 
     def normalize_result(
-        self, raw_result: Any, state: Optional[dict],
+        self,
+        raw_result: Any,
+        state: Optional[dict],
     ) -> Optional[Dict[str, Any]]:
         """Translate LangGraph-specific result shapes into semantic keys.
 
@@ -90,9 +95,8 @@ class LangGraphAdapter:
                 if agent_answers and isinstance(agent_answers[-1], dict)
                 else final_answer
             )
-            is_fallback = (
-                answer == "Unable to generate an answer."
-                or not bool((answer or "").strip())
+            is_fallback = answer == "Unable to generate an answer." or not bool(
+                (answer or "").strip()
             )
             norm["agent_answer"] = answer
             norm["is_fallback"] = is_fallback
@@ -123,10 +127,14 @@ class LangGraphAdapter:
 
             retrieved_ids = state.get("retrieval_keys", set()) or set()
             norm["parents_retrieved"] = sorted(
-                r.replace("parent::", "") for r in retrieved_ids if r.startswith("parent::")
+                r.replace("parent::", "")
+                for r in retrieved_ids
+                if r.startswith("parent::")
             )
             norm["queries_run"] = sorted(
-                r.replace("search::", "") for r in retrieved_ids if r.startswith("search::")
+                r.replace("search::", "")
+                for r in retrieved_ids
+                if r.startswith("search::")
             )
 
         return norm if norm else None
@@ -144,4 +152,7 @@ class LangGraphAdapter:
             return 0
         msgs = state.get("messages", [])
         summary = state.get("context_summary", "") or ""
-        return sum(len(getattr(m, "content", "") or "") for m in msgs) // 4 + len(summary) // 4
+        return (
+            sum(len(getattr(m, "content", "") or "") for m in msgs) // 4
+            + len(summary) // 4
+        )

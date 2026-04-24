@@ -61,6 +61,7 @@ _DEFAULT_CHUNK_CONTENT_CHARS = 600
 # record_chunks
 # ---------------------------------------------------------------------------
 
+
 def record_chunks(
     results: Sequence[Tuple[Any, float]],
     *,
@@ -106,7 +107,7 @@ def record_chunks(
 
     # --- Aggregate stats ---------------------------------------------------
     safe_set_attribute(sp, CHUNK_COUNT, len(results))
-    safe_set_attribute(sp, CHUNK_RELEVANCE_SCORES, scores)       # legacy array
+    safe_set_attribute(sp, CHUNK_RELEVANCE_SCORES, scores)  # legacy array
     avg = sum(scores) / len(scores)
     safe_set_attribute(sp, CHUNK_RELEVANCE_SCORE, round(avg, 4))  # legacy scalar
     safe_set_attribute(sp, CHUNK_AVG_SCORE, round(avg, 4))
@@ -126,16 +127,19 @@ def record_chunks(
 
         metadata = getattr(doc, "metadata", {}) or {}
 
-        safe_set_attribute(sp, f"{pfx}.content",   content)
-        safe_set_attribute(sp, f"{pfx}.score",     round(float(score), 4))
-        safe_set_attribute(sp, f"{pfx}.source",    str(metadata.get("source", "")))
+        safe_set_attribute(sp, f"{pfx}.content", content)
+        safe_set_attribute(sp, f"{pfx}.score", round(float(score), 4))
+        safe_set_attribute(sp, f"{pfx}.source", str(metadata.get("source", "")))
         safe_set_attribute(sp, f"{pfx}.parent_id", str(metadata.get("parent_id", "")))
-        safe_set_attribute(sp, f"{pfx}.char_count", len(getattr(doc, "page_content", "") or ""))
+        safe_set_attribute(
+            sp, f"{pfx}.char_count", len(getattr(doc, "page_content", "") or "")
+        )
 
 
 # ---------------------------------------------------------------------------
 # record_agent_completion
 # ---------------------------------------------------------------------------
+
 
 def record_agent_completion(
     status: str,
@@ -206,6 +210,7 @@ def record_agent_completion(
 # record_routing
 # ---------------------------------------------------------------------------
 
+
 def record_routing(
     from_node: str,
     to_node: str,
@@ -256,6 +261,7 @@ def record_routing(
 # record_tool_calls
 # ---------------------------------------------------------------------------
 
+
 def record_tool_calls(
     tool_calls: List[dict],
     *,
@@ -295,7 +301,7 @@ def record_tool_calls(
         pfx = f"{LLM_TOOL_CALL_PREFIX}.{i}"
         safe_set_attribute(sp, f"{pfx}.name", tc.get("name", ""))
         safe_set_attribute(sp, f"{pfx}.args", str(tc.get("args", {})))
-        safe_set_attribute(sp, f"{pfx}.id",   str(tc.get("id", "")))
+        safe_set_attribute(sp, f"{pfx}.id", str(tc.get("id", "")))
 
     sp.add_event(
         "llm.tool_calls_decided",
@@ -309,6 +315,7 @@ def record_tool_calls(
 # ---------------------------------------------------------------------------
 # record_context_compression
 # ---------------------------------------------------------------------------
+
 
 def record_context_compression(
     tokens_before: int,
@@ -374,6 +381,7 @@ def record_context_compression(
 # ---------------------------------------------------------------------------
 # record_query_rewrite
 # ---------------------------------------------------------------------------
+
 
 def record_query_rewrite(
     original_query: str,

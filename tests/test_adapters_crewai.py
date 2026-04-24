@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from tests.conftest import InMemorySpanExporter
 
-from ragwatch.adapters.crewai import endpoint, node
+from ragwatch.adapters.crewai import CrewAIAdapter, endpoint, node
 from ragwatch.core.config import RAGWatchConfig
 from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
 from ragwatch.instrumentation.semconv import OPENINFERENCE_SPAN_KIND
@@ -98,15 +98,7 @@ async def test_endpoint_async(_setup):
     assert any(s.name == "async-crew" for s in exporter.get_finished_spans())
 
 
-# ---------------------------------------------------------------------------
-# CrewAI normalize_result()
-# ---------------------------------------------------------------------------
-
-from ragwatch.adapters.crewai.adapter import CrewAIAdapter
-
-
 class TestCrewAINormalizeResult:
-
     def test_normalize_task_output_dict(self):
         adapter = CrewAIAdapter()
         result = {"task_output": "The answer is 42", "status": "success"}
@@ -142,8 +134,10 @@ class TestCrewAINormalizeResult:
 
     def test_normalize_task_output_object_with_raw(self):
         """CrewAI TaskOutput-like object with .raw attribute."""
+
         class FakeTaskOutput:
             raw = "The raw answer"
+
         adapter = CrewAIAdapter()
         norm = adapter.normalize_result(FakeTaskOutput(), {})
         assert norm is not None
@@ -151,8 +145,10 @@ class TestCrewAINormalizeResult:
 
     def test_normalize_task_output_object_with_output(self):
         """CrewAI TaskOutput-like object with .output attribute."""
+
         class FakeTaskOutput:
             output = "The output"
+
         adapter = CrewAIAdapter()
         norm = adapter.normalize_result(FakeTaskOutput(), {})
         assert norm["agent_answer"] == "The output"

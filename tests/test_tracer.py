@@ -7,7 +7,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from tests.conftest import InMemorySpanExporter
 
-from ragwatch import configure, RAGWatchConfig
+from ragwatch import RAGWatchConfig, RAGWatchRuntime, configure
 from ragwatch.core.tracer import (
     configure_tracer,
     get_tracer,
@@ -180,13 +180,15 @@ def test_get_tracer_provider_returns_configured():
 
 def test_public_configure():
     exporter = InMemorySpanExporter()
-    configure(RAGWatchConfig(service_name="pub", exporter=exporter))
+    runtime = configure(RAGWatchConfig(service_name="pub", exporter=exporter))
     assert get_tracer_provider() is not None
+    assert isinstance(runtime, RAGWatchRuntime)
 
 
 # ---------------------------------------------------------------------------
 # Sampler support (P1)
 # ---------------------------------------------------------------------------
+
 
 def test_default_sampler_records_all_spans():
     """With no sampler configured (ALWAYS_ON default), every span is exported."""

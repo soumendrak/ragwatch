@@ -38,8 +38,13 @@ def node(
         auto_track_io: Whether to auto-capture input/output.
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.AGENT, auto_track_io=auto_track_io,
-                     span_hooks=span_hooks, adapter="crewai")
+        return trace(
+            func,
+            span_kind=SpanKind.AGENT,
+            auto_track_io=auto_track_io,
+            span_hooks=span_hooks,
+            adapter="crewai",
+        )
 
     actual_span_name = func if isinstance(func, str) else span_name
 
@@ -78,8 +83,13 @@ def endpoint(
         auto_track_io: Whether to auto-capture input/output.
     """
     if callable(func):
-        return trace(func, span_kind=SpanKind.CHAIN, auto_track_io=auto_track_io,
-                     span_hooks=span_hooks, adapter="crewai")
+        return trace(
+            func,
+            span_kind=SpanKind.CHAIN,
+            auto_track_io=auto_track_io,
+            span_hooks=span_hooks,
+            adapter="crewai",
+        )
 
     actual_span_name = func if isinstance(func, str) else span_name
 

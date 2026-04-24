@@ -12,6 +12,7 @@ actual LangGraph StateGraph for a simple RAG pipeline.
 
 from typing import TypedDict
 
+from langgraph.graph import END, StateGraph
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
 import ragwatch
@@ -26,9 +27,6 @@ ragwatch.configure(
         exporter=ConsoleSpanExporter(),
     )
 )
-
-# Import LangGraph after RAGWatch config
-from langgraph.graph import StateGraph, END
 
 
 # Define the state schema
@@ -120,7 +118,9 @@ if __name__ == "__main__":
     rag_graph = build_rag_graph()
 
     # Run the pipeline
-    result = rag_graph.invoke({"query": "What is RAG?", "embedding": [], "docs": [], "response": ""})
+    result = rag_graph.invoke(
+        {"query": "What is RAG?", "embedding": [], "docs": [], "response": ""}
+    )
 
     print(f"\nQuery: {result['query']}")
     print(f"\nRetrieved {len(result['docs'])} chunks:")

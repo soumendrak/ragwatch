@@ -3,7 +3,6 @@
 from __future__ import annotations
 from unittest.mock import MagicMock
 
-import pytest
 
 import ragwatch
 from ragwatch.core.config import RAGWatchConfig
@@ -18,8 +17,8 @@ from ragwatch.instrumentation.attributes import safe_set_attribute, safe_set_att
 # validate_attribute_name
 # ---------------------------------------------------------------------------
 
-class TestValidateAttributeName:
 
+class TestValidateAttributeName:
     def test_valid_simple(self):
         assert validate_attribute_name("ragwatch.custom.latency") is True
 
@@ -74,8 +73,8 @@ class TestValidateAttributeName:
 # AttributePolicy — truncation
 # ---------------------------------------------------------------------------
 
-class TestAttributePolicyTruncation:
 
+class TestAttributePolicyTruncation:
     def test_short_string_unchanged(self):
         policy = AttributePolicy(max_value_bytes=100)
         assert policy.apply("key", "short") == "short"
@@ -103,8 +102,8 @@ class TestAttributePolicyTruncation:
 # AttributePolicy — pattern-based redaction
 # ---------------------------------------------------------------------------
 
-class TestAttributePolicyPatternRedaction:
 
+class TestAttributePolicyPatternRedaction:
     def test_email_pattern_redacted(self):
         policy = AttributePolicy(
             redact_patterns=[r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"]
@@ -116,9 +115,7 @@ class TestAttributePolicyPatternRedaction:
         assert policy.apply("msg", "no ssn here") == "no ssn here"
 
     def test_multiple_patterns(self):
-        policy = AttributePolicy(
-            redact_patterns=[r"password=\S+", r"secret=\S+"]
-        )
+        policy = AttributePolicy(redact_patterns=[r"password=\S+", r"secret=\S+"])
         assert policy.apply("log", "password=abc123") == "[REDACTED]"
         assert policy.apply("log", "secret=xyz") == "[REDACTED]"
         assert policy.apply("log", "safe value") == "safe value"
@@ -132,8 +129,8 @@ class TestAttributePolicyPatternRedaction:
 # AttributePolicy — key-based redaction
 # ---------------------------------------------------------------------------
 
-class TestAttributePolicyKeyRedaction:
 
+class TestAttributePolicyKeyRedaction:
     def test_key_contains_password(self):
         policy = AttributePolicy(redact_keys=["password"])
         assert policy.apply("user.password", "secret123") == "[REDACTED]"
@@ -160,8 +157,8 @@ class TestAttributePolicyKeyRedaction:
 # AttributePolicy — combined rules
 # ---------------------------------------------------------------------------
 
-class TestAttributePolicyCombined:
 
+class TestAttributePolicyCombined:
     def test_key_redaction_takes_precedence(self):
         """Key-based redaction fires before pattern/truncation."""
         policy = AttributePolicy(
@@ -188,8 +185,8 @@ class TestAttributePolicyCombined:
 # safe_set_attribute — centralized writer
 # ---------------------------------------------------------------------------
 
-class TestSafeSetAttribute:
 
+class TestSafeSetAttribute:
     def setup_method(self):
         self._prev = ragwatch._ACTIVE_CONFIG
 
@@ -251,6 +248,7 @@ class TestSafeSetAttribute:
         span.is_recording.return_value = True
         # record_routing uses safe_set_attribute internally
         from ragwatch.instrumentation.helpers import record_routing
+
         record_routing("node_a", "node_b", reason="test", span=span)
         # All values should have been set (none redacted since keys don't match)
         assert span.set_attribute.call_count >= 2
@@ -260,8 +258,8 @@ class TestSafeSetAttribute:
 # Strict mode: invalid attribute names are skipped
 # ---------------------------------------------------------------------------
 
-class TestStrictInvalidAttributeNames:
 
+class TestStrictInvalidAttributeNames:
     def setup_method(self):
         self._prev = ragwatch._ACTIVE_CONFIG
 
@@ -272,7 +270,8 @@ class TestStrictInvalidAttributeNames:
         """In strict mode with a policy, invalid attribute names are skipped."""
         policy = AttributePolicy()
         ragwatch._ACTIVE_CONFIG = RAGWatchConfig(
-            attribute_policy=policy, strict_mode=True,
+            attribute_policy=policy,
+            strict_mode=True,
         )
         span = MagicMock()
         span.is_recording.return_value = True
@@ -287,7 +286,8 @@ class TestStrictInvalidAttributeNames:
         """In non-strict mode, invalid names are warned but still written."""
         policy = AttributePolicy()
         ragwatch._ACTIVE_CONFIG = RAGWatchConfig(
-            attribute_policy=policy, strict_mode=False,
+            attribute_policy=policy,
+            strict_mode=False,
         )
         span = MagicMock()
         span.is_recording.return_value = True
@@ -298,7 +298,8 @@ class TestStrictInvalidAttributeNames:
         """Valid attribute names pass through even in strict mode."""
         policy = AttributePolicy()
         ragwatch._ACTIVE_CONFIG = RAGWatchConfig(
-            attribute_policy=policy, strict_mode=True,
+            attribute_policy=policy,
+            strict_mode=True,
         )
         span = MagicMock()
         span.is_recording.return_value = True
@@ -310,8 +311,8 @@ class TestStrictInvalidAttributeNames:
 # Collection/cardinality controls
 # ---------------------------------------------------------------------------
 
-class TestCollectionControls:
 
+class TestCollectionControls:
     def test_list_truncated_at_max_list_length(self):
         policy = AttributePolicy(max_list_length=3)
         result = policy.apply("my.key", [1, 2, 3, 4, 5])

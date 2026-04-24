@@ -1,7 +1,7 @@
 """Tests for contract stabilization changes.
 
 Covers:
-- Protocol alignment (dual-signature for all 4 extension protocols)
+- Protocol alignment (InstrumentationContext for all 4 extension protocols)
 - InstrumentationContext.normalized field
 - Indexed attribute explosion guard
 - I/O privacy scrubbing (redact_io_keys)
@@ -15,13 +15,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from opentelemetry import trace as otel_trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 import ragwatch
 from ragwatch import (
-    AttributePolicy,
     InstrumentationContext,
     RAGWatchConfig,
     SpanKind,
@@ -50,6 +46,7 @@ from tests.conftest import InMemorySpanExporter
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _clean_config():
@@ -81,10 +78,9 @@ def mock_span():
 # 1. InstrumentationContext exported from ragwatch
 # ---------------------------------------------------------------------------
 
-class TestInstrumentationContextExport:
 
+class TestInstrumentationContextExport:
     def test_importable_from_top_level(self):
-        from ragwatch import InstrumentationContext
         assert InstrumentationContext is CtxModel
 
     def test_in_all(self):
@@ -93,7 +89,10 @@ class TestInstrumentationContextExport:
     def test_normalized_field_exists(self):
         span = MagicMock()
         ctx = CtxModel(
-            span=span, span_name="t", span_kind=SpanKind.CHAIN, func_name="f",
+            span=span,
+            span_name="t",
+            span_kind=SpanKind.CHAIN,
+            func_name="f",
         )
         assert ctx.normalized is None
         ctx.normalized = {"tool_calls": []}
@@ -104,8 +103,8 @@ class TestInstrumentationContextExport:
 # 2. Indexed attribute explosion guard
 # ---------------------------------------------------------------------------
 
-class TestIndexedAttributeExplosion:
 
+class TestIndexedAttributeExplosion:
     def test_writes_under_limit_allowed(self, mock_span):
         policy = AP(max_indexed_attributes=3)
         ragwatch._ACTIVE_CONFIG = RAGWatchConfig(attribute_policy=policy)
@@ -170,8 +169,8 @@ class TestIndexedAttributeExplosion:
 # 3. I/O privacy scrubbing
 # ---------------------------------------------------------------------------
 
-class TestIOPrivacyScrubbing:
 
+class TestIOPrivacyScrubbing:
     def test_scrub_io_payload_redacts_sensitive_keys(self):
         policy = AP(redact_io_keys=["password", "secret"])
         payload = {"username": "alice", "password": "s3cret", "data": "ok"}
@@ -238,16 +237,20 @@ class TestIOPrivacyScrubbing:
 # 4. normalize_result() on adapters
 # ---------------------------------------------------------------------------
 
-class TestNormalizeResult:
 
+class TestNormalizeResult:
     def test_normalize_result_none_adapter(self):
         assert normalize_result(None, {"data": 1}, {}) is None
 
     def test_normalize_result_adapter_without_method(self):
         class _Plain:
             name = "plain"
-            def extract_state(self, args, kwargs): return None
-            def default_extractors(self): return []
+
+            def extract_state(self, args, kwargs):
+                return None
+
+            def default_extractors(self):
+                return []
 
         assert normalize_result(_Plain(), {"data": 1}, {}) is None
 
@@ -308,15 +311,19 @@ class TestNormalizeResult:
 # 5. Built-in extractors reading normalized keys (context-first path)
 # ---------------------------------------------------------------------------
 
-class TestExtractorsNormalized:
 
+class TestExtractorsNormalized:
     def _make_ctx(self, raw_result, normalized=None, state=None):
         span = MagicMock()
         span.is_recording.return_value = True
         return CtxModel(
-            span=span, span_name="test", span_kind=SpanKind.AGENT,
-            func_name="test_fn", state=state or {},
-            normalized=normalized, raw_result=raw_result,
+            span=span,
+            span_name="test",
+            span_kind=SpanKind.AGENT,
+            func_name="test_fn",
+            state=state or {},
+            normalized=normalized,
+            raw_result=raw_result,
         )
 
     def test_tool_calls_from_normalized(self):
@@ -333,7 +340,10 @@ class TestExtractorsNormalized:
     def test_routing_from_normalized(self):
         ctx = self._make_ctx(
             raw_result={},
-            normalized={"routing_target": "tools", "routing_reason": "calling: [search]"},
+            normalized={
+                "routing_target": "tools",
+                "routing_reason": "calling: [search]",
+            },
         )
         ext = RoutingExtractor()
         ext.extract(ctx)
@@ -344,8 +354,12 @@ class TestExtractorsNormalized:
         ctx = self._make_ctx(
             raw_result={},
             normalized={"agent_answer": "42", "is_fallback": False},
-            state={"iteration_count": 2, "tool_call_count": 1,
-                   "question": "what?", "question_index": 0},
+            state={
+                "iteration_count": 2,
+                "tool_call_count": 1,
+                "question": "what?",
+                "question_index": 0,
+            },
         )
         ext = AgentCompletionExtractor()
         ext.extract(ctx)
@@ -392,96 +406,72 @@ class TestExtractorsNormalized:
 
 
 # ---------------------------------------------------------------------------
-# 6. Protocol dual-signature — runtime_checkable still works
+# 6. Context-first protocols — runtime_checkable still works
 # ---------------------------------------------------------------------------
 
-class TestProtocolDualSignature:
 
+class TestProtocolContextFirst:
     def test_context_first_extractor_is_telemetry_extractor(self):
         from ragwatch import TelemetryExtractor
 
         class _CtxFirst:
             name = "ctx"
-            def extract(self, context): pass
+
+            def extract(self, context):
+                pass
 
         assert isinstance(_CtxFirst(), TelemetryExtractor)
-
-    def test_legacy_extractor_is_telemetry_extractor(self):
-        from ragwatch import TelemetryExtractor
-
-        class _Legacy:
-            name = "leg"
-            def extract(self, span, span_name, args, result, state): pass
-
-        assert isinstance(_Legacy(), TelemetryExtractor)
 
     def test_context_first_hook_is_span_hook(self):
         from ragwatch import SpanHook
 
         class _CtxHook:
-            def on_start(self, span, args, kwargs, *, context=None): pass
-            def on_end(self, span, result, *, context=None): pass
+            def on_start(self, span, args, kwargs, *, context=None):
+                pass
+
+            def on_end(self, span, result, *, context=None):
+                pass
 
         assert isinstance(_CtxHook(), SpanHook)
-
-    def test_legacy_hook_is_span_hook(self):
-        from ragwatch import SpanHook
-
-        class _LegHook:
-            def on_start(self, span, args, kwargs): pass
-            def on_end(self, span, result): pass
-
-        assert isinstance(_LegHook(), SpanHook)
 
     def test_context_first_transformer_is_result_transformer(self):
         from ragwatch import ResultTransformer
 
         class _CtxTrans:
             @property
-            def span_kind(self): return SpanKind.TOOL
-            def transform(self, context): return context.raw_result
+            def span_kind(self):
+                return SpanKind.TOOL
+
+            def transform(self, context):
+                return context.raw_result
 
         assert isinstance(_CtxTrans(), ResultTransformer)
-
-    def test_legacy_transformer_is_result_transformer(self):
-        from ragwatch import ResultTransformer
-
-        class _LegTrans:
-            @property
-            def span_kind(self): return SpanKind.TOOL
-            def transform(self, span, args, kwargs, result, formatter): return result
-
-        assert isinstance(_LegTrans(), ResultTransformer)
 
     def test_context_first_token_extractor_is_token_extractor(self):
         from ragwatch import TokenExtractor
 
         class _CtxTok:
-            def extract(self, context): pass
+            def extract(self, context):
+                pass
 
         assert isinstance(_CtxTok(), TokenExtractor)
-
-    def test_legacy_token_extractor_is_token_extractor(self):
-        from ragwatch import TokenExtractor
-
-        class _LegTok:
-            def extract(self, span, result): pass
-
-        assert isinstance(_LegTok(), TokenExtractor)
 
 
 # ---------------------------------------------------------------------------
 # 7. End-to-end: context-first extractor via decorator
 # ---------------------------------------------------------------------------
 
-class TestContextFirstE2E:
 
-    def test_context_first_extractor_receives_normalized_none_without_adapter(self, exporter):
+class TestContextFirstE2E:
+    def test_context_first_extractor_receives_normalized_none_without_adapter(
+        self, exporter
+    ):
         """Without an adapter, ctx.normalized is None."""
         captured = {}
 
         class _NormExtractor:
             name = "norm_check"
+
             def extract(self, context):
                 captured["normalized"] = context.normalized
                 captured["raw_result"] = context.raw_result
@@ -502,17 +492,20 @@ class TestContextFirstE2E:
 # 8. Positive E2E: @trace(adapter="langgraph") → ctx.normalized
 # ---------------------------------------------------------------------------
 
-class TestNormalizedE2EWithAdapter:
 
+class TestNormalizedE2EWithAdapter:
     @pytest.fixture()
     def lg_exporter(self):
         """Exporter + LangGraphAdapter configured together."""
         from ragwatch.adapters.langgraph.adapter import LangGraphAdapter
+
         exp = InMemorySpanExporter()
-        configure(RAGWatchConfig(
-            service_name="e2e-norm-test",
-            adapters=[LangGraphAdapter()],
-        ))
+        configure(
+            RAGWatchConfig(
+                service_name="e2e-norm-test",
+                adapters=[LangGraphAdapter()],
+            )
+        )
         # Override tracer with force-flush so spans export immediately
         configure_tracer(
             RAGWatchConfig(service_name="e2e-norm-test", exporter=exp),
@@ -527,17 +520,24 @@ class TestNormalizedE2EWithAdapter:
 
         class _CaptureExtractor:
             name = "capture_norm"
+
             def extract(self, context):
                 captured["normalized"] = context.normalized
                 captured["state"] = context.state
 
         get_default_registry().register(_CaptureExtractor())
 
-        @trace("e2e-agent", span_kind=SpanKind.AGENT,
-               telemetry=["capture_norm"], adapter="langgraph")
+        @trace(
+            "e2e-agent",
+            span_kind=SpanKind.AGENT,
+            telemetry=["capture_norm"],
+            adapter="langgraph",
+        )
         def agent_node(state):
-            return {"agent_answers": [{"answer": "The answer is 42"}],
-                    "final_answer": "The answer is 42"}
+            return {
+                "agent_answers": [{"answer": "The answer is 42"}],
+                "final_answer": "The answer is 42",
+            }
 
         agent_node({"question": "What is the meaning?"})
 
@@ -552,6 +552,7 @@ class TestNormalizedE2EWithAdapter:
 
         class _CaptureExtractor:
             name = "capture_tc"
+
             def extract(self, context):
                 captured["normalized"] = context.normalized
 
@@ -560,8 +561,12 @@ class TestNormalizedE2EWithAdapter:
         msg = MagicMock()
         msg.tool_calls = [{"name": "web_search", "args": {"q": "RAGWatch"}}]
 
-        @trace("e2e-tools", span_kind=SpanKind.AGENT,
-               telemetry=["capture_tc"], adapter="langgraph")
+        @trace(
+            "e2e-tools",
+            span_kind=SpanKind.AGENT,
+            telemetry=["capture_tc"],
+            adapter="langgraph",
+        )
         def orchestrator(state):
             return {"messages": [msg]}
 
@@ -577,13 +582,18 @@ class TestNormalizedE2EWithAdapter:
 
         class _CaptureExtractor:
             name = "capture_qr"
+
             def extract(self, context):
                 captured["normalized"] = context.normalized
 
         get_default_registry().register(_CaptureExtractor())
 
-        @trace("e2e-qr", span_kind=SpanKind.AGENT,
-               telemetry=["capture_qr"], adapter="langgraph")
+        @trace(
+            "e2e-qr",
+            span_kind=SpanKind.AGENT,
+            telemetry=["capture_qr"],
+            adapter="langgraph",
+        )
         def rewriter(state):
             return {
                 "rewrittenQuestions": ["sub-q1", "sub-q2"],
@@ -605,6 +615,7 @@ class TestNormalizedE2EWithAdapter:
 
         class _CaptureExtractor:
             name = "capture_route"
+
             def extract(self, context):
                 captured["normalized"] = context.normalized
 
@@ -614,8 +625,12 @@ class TestNormalizedE2EWithAdapter:
         cmd.goto = "compress"
         cmd.update = {}
 
-        @trace("e2e-route", span_kind=SpanKind.AGENT,
-               telemetry=["capture_route"], adapter="langgraph")
+        @trace(
+            "e2e-route",
+            span_kind=SpanKind.AGENT,
+            telemetry=["capture_route"],
+            adapter="langgraph",
+        )
         def router(state):
             return cmd
 
@@ -630,8 +645,8 @@ class TestNormalizedE2EWithAdapter:
 # 9. Normalization failure handling (P1)
 # ---------------------------------------------------------------------------
 
-class TestNormalizationFailureHandling:
 
+class TestNormalizationFailureHandling:
     @staticmethod
     def _make_exporter_and_configure(**kwargs):
         reset_tracer_provider()
@@ -646,10 +661,16 @@ class TestNormalizationFailureHandling:
 
     def test_normalize_error_logged_and_span_event(self):
         """Broken normalize_result() logs warning + records span event."""
+
         class _BrokenAdapter:
             name = "broken"
-            def extract_state(self, args, kwargs): return None
-            def default_extractors(self): return []
+
+            def extract_state(self, args, kwargs):
+                return None
+
+            def default_extractors(self):
+                return []
+
             def normalize_result(self, raw_result, state):
                 raise ValueError("normalization boom")
 
@@ -676,14 +697,20 @@ class TestNormalizationFailureHandling:
 
     def test_normalize_error_strict_mode_reraises(self):
         """In strict_mode, broken normalize_result() re-raises."""
+
         class _BrokenAdapter:
             name = "broken_strict"
-            def extract_state(self, args, kwargs): return None
-            def default_extractors(self): return []
+
+            def extract_state(self, args, kwargs):
+                return None
+
+            def default_extractors(self):
+                return []
+
             def normalize_result(self, raw_result, state):
                 raise RuntimeError("strict boom")
 
-        exp = self._make_exporter_and_configure(
+        self._make_exporter_and_configure(
             service_name="norm-strict-test",
             adapters=[_BrokenAdapter()],
             strict_mode=True,
@@ -700,6 +727,7 @@ class TestNormalizationFailureHandling:
 
     def test_normalize_graceful_when_no_adapter(self, exporter):
         """Without an adapter, normalization is silently None — no event."""
+
         @trace("no-adapter", span_kind=SpanKind.AGENT)
         def my_func(state):
             return {"data": True}

@@ -2,13 +2,13 @@
 
 Build custom telemetry extractors, span hooks, result transformers, token extractors, and framework adapters for RAGWatch.
 
-> **Context-first is the canonical extension model.**  All extension points accept an `InstrumentationContext` parameter that provides the span, state, adapter, raw result, and a policy-enforced `set_attribute()` writer.  Legacy positional signatures are still supported for backward compatibility.
+> **InstrumentationContext is the canonical extension model.** All extension points accept an `InstrumentationContext` parameter that provides the span, state, adapter, raw result, and a policy-enforced `set_attribute()` writer.
 
 ---
 
 ## InstrumentationContext
 
-Every extension point receives (or can opt into) an `InstrumentationContext`:
+Every extension point receives an `InstrumentationContext`:
 
 ```python
 from ragwatch import InstrumentationContext
@@ -38,7 +38,7 @@ Use `ctx.set_attribute()` instead of `span.set_attribute()` — it automatically
 
 Extractors run after the decorated function returns.  They read the result and write span attributes.
 
-### Context-first (recommended)
+### Implementation
 
 ```python
 from ragwatch import InstrumentationContext
@@ -50,19 +50,6 @@ class LatencyExtractor:
         result = context.raw_result
         if isinstance(result, dict) and "latency_ms" in result:
             context.set_attribute("custom.latency_ms", result["latency_ms"])
-```
-
-### Legacy (still supported)
-
-```python
-from ragwatch import safe_set_attribute
-
-class LatencyExtractor:
-    name = "latency"
-
-    def extract(self, span, span_name, args, result, state) -> None:
-        if isinstance(result, dict) and "latency_ms" in result:
-            safe_set_attribute(span, "custom.latency_ms", result["latency_ms"])
 ```
 
 ### Registration
@@ -91,7 +78,7 @@ def my_function(state):
 
 Hooks run at span lifecycle events: `on_start`, `on_end`, `on_error`.
 
-### Context-first (recommended)
+### Implementation
 
 ```python
 from ragwatch import InstrumentationContext
@@ -108,21 +95,6 @@ class AuditHook:
     def on_error(self, span, exception, *, context: InstrumentationContext = None):
         if context:
             context.set_attribute("audit.error_type", type(exception).__name__)
-```
-
-### Legacy (still supported)
-
-Even in legacy hooks, prefer `safe_set_attribute()` for policy-enforced writes:
-
-```python
-from ragwatch import safe_set_attribute
-
-class SimpleHook:
-    def on_start(self, span, args, kwargs):
-        safe_set_attribute(span, "hook.started", True)
-
-    def on_end(self, span, result):
-        pass
 ```
 
 ### Registration
@@ -142,7 +114,7 @@ def my_function(): ...
 
 Transformers convert raw results per `SpanKind`.  Only one transformer per kind is active.
 
-### Context-first (recommended)
+### Implementation
 
 ```python
 from ragwatch import InstrumentationContext, SpanKind
@@ -158,21 +130,6 @@ class JsonToolTransformer:
         if isinstance(raw, (dict, list)):
             return json.dumps(raw, default=str)
         return raw
-```
-
-### Legacy (still supported)
-
-```python
-class JsonToolTransformer:
-    @property
-    def span_kind(self):
-        return SpanKind.TOOL
-
-    def transform(self, span, args, kwargs, result, result_formatter):
-        import json
-        if isinstance(result, (dict, list)):
-            return json.dumps(result, default=str)
-        return result
 ```
 
 ### Registration
@@ -324,12 +281,11 @@ policy = AttributePolicy(
 |---------|--------|
 | `configure()`, `trace()`, `record_feedback()` | **Stable** |
 | `InstrumentationContext` fields | **Stable** |
-| `TelemetryExtractor`, `SpanHook`, `ResultTransformer`, `TokenExtractor` protocols | **Stable** (dual-signature) |
+| `TelemetryExtractor`, `SpanHook`, `ResultTransformer`, `TokenExtractor` protocols | **Stable** (`InstrumentationContext`) |
 | `FrameworkAdapter` protocol (`extract_state`, `default_extractors`) | **Stable** |
 | `AttributePolicy` fields | **Stable** |
 | `normalize_result()` on adapters | **Experimental** — semantic keys may evolve |
 | `capabilities()` on adapters | **Experimental** |
-| Legacy positional signatures | **Supported** but not recommended for new code |
 
 ---
 
