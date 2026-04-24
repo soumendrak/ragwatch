@@ -185,6 +185,11 @@ Adapters tell RAGWatch how to extract state from framework-specific function arg
 
 Optional methods are detected via `getattr` at runtime and are **not** part of the `FrameworkAdapter` Protocol to preserve `@runtime_checkable` compatibility with minimal adapters.
 
+When an adapter declares capabilities, RAGWatch records a
+`ragwatch.unsupported_telemetry` span event if a decorator requests telemetry
+outside that set. Extraction still runs so custom extractors and partial
+framework support continue to work.
+
 ### Example
 
 ```python

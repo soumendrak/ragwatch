@@ -292,6 +292,36 @@ def test_trace_decorator_adapter_param(_setup):
     assert _StateCapturingExtractor.captured_state == {"from_kwarg": True}
 
 
+def test_trace_records_unsupported_adapter_telemetry_event(_setup):
+    exporter = _setup
+
+    @trace("crewai-node", telemetry=["routing"], adapter="crewai")
+    def my_fn():
+        return {"output": "done"}
+
+    my_fn()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "crewai-node")
+    events = [e for e in span.events if e.name == "ragwatch.unsupported_telemetry"]
+    assert len(events) == 1
+    assert events[0].attributes["adapter"] == "crewai"
+    assert events[0].attributes["telemetry"] == "routing"
+
+
+def test_supported_adapter_telemetry_has_no_capability_event(_setup):
+    exporter = _setup
+
+    @trace("langgraph-node", telemetry=["routing"], adapter="langgraph")
+    def my_fn(state):
+        return {"messages": []}
+
+    my_fn({})
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "langgraph-node")
+    events = [e for e in span.events if e.name == "ragwatch.unsupported_telemetry"]
+    assert events == []
+
+
 def test_langgraph_capabilities():
     adapter = LangGraphAdapter()
     caps = get_capabilities(adapter)

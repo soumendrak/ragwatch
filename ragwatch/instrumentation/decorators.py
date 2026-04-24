@@ -366,6 +366,7 @@ def _extract_node_telemetry(
     telemetry: List[str],
 ) -> None:
     """Delegate telemetry extraction to the pluggable registry."""
+    _record_unsupported_adapter_telemetry(ctx, telemetry)
     from ragwatch.instrumentation.extractors import get_default_registry
 
     get_default_registry().extract_all(
@@ -378,6 +379,30 @@ def _extract_node_telemetry(
         adapter=ctx.adapter,
         context=ctx,
     )
+
+
+def _record_unsupported_adapter_telemetry(
+    ctx: InstrumentationContext,
+    telemetry: List[str],
+) -> None:
+    """Record capability mismatches without blocking extraction."""
+    if ctx.adapter is None:
+        return
+    from ragwatch.adapters.base import get_capabilities
+
+    capabilities = get_capabilities(ctx.adapter)
+    if not capabilities:
+        return
+    adapter_name = getattr(ctx.adapter, "name", "unknown")
+    for name in telemetry:
+        if name not in capabilities:
+            ctx.span.add_event(
+                "ragwatch.unsupported_telemetry",
+                {
+                    "adapter": adapter_name,
+                    "telemetry": name,
+                },
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

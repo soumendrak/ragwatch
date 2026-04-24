@@ -21,6 +21,7 @@ stable before adding more framework integrations.
 
 ## v0.6 Adapter Expansion
 
-- Harden adapter capability negotiation.
+- Harden adapter capability negotiation. Initial mismatch reporting is emitted
+  as `ragwatch.unsupported_telemetry` span events.
 - Add cookbook-style examples for production LangGraph and CrewAI workflows.
 - Evaluate additional adapters based on real user demand.
