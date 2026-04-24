@@ -415,7 +415,7 @@ ragwatch.configure(RAGWatchConfig(service_name="my-app"))
 | `TelemetryExtractor` | Pluggable telemetry extraction protocol |
 | `FrameworkAdapter` | Framework adapter protocol |
 
-See [`docs/EXTENSION_GUIDE.md`](docs/EXTENSION_GUIDE.md) for the full extension authoring guide and [`docs/roadmap.md`](docs/roadmap.md) for upcoming work.
+See [`docs/EXTENSION_GUIDE.md`](docs/EXTENSION_GUIDE.md) for the full extension authoring guide, [`docs/production-cookbook.md`](docs/production-cookbook.md) for production patterns, and [`docs/roadmap.md`](docs/roadmap.md) for upcoming work.
 
 ---
 

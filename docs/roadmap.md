@@ -25,4 +25,5 @@ stable before adding more framework integrations.
 - Harden adapter capability negotiation. Initial mismatch reporting is emitted
   as `ragwatch.unsupported_telemetry` span events.
 - Add cookbook-style examples for production LangGraph and CrewAI workflows.
+  Initial production cookbook is available in `docs/production-cookbook.md`.
 - Evaluate additional adapters based on real user demand.

@@ -20,6 +20,7 @@
 | [Extension Guide](EXTENSION_GUIDE.md) | Full guide to all extension protocols and adapter contracts |
 | [API Reference](api-reference.md) | Complete public API surface |
 | [Roadmap](roadmap.md) | Planned runtime, schema, and adapter work |
+| [Production Cookbook](production-cookbook.md) | Production LangGraph, CrewAI, and feedback patterns |
 
 ---
 
