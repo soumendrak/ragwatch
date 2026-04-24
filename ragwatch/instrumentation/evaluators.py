@@ -8,10 +8,12 @@ Provides:
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Optional
 
 from opentelemetry import trace as otel_trace
+from opentelemetry.trace import Link, SpanContext, TraceFlags, TraceState
 
 from ragwatch.core.context import get_query_embedding
 from ragwatch.core.tracer import get_tracer
@@ -20,8 +22,11 @@ from ragwatch.instrumentation.semconv import (
     CHUNK_RELEVANCE_SCORE,
     CHUNK_RELEVANCE_SCORES,
     USER_FEEDBACK_SCORE,
+    USER_FEEDBACK_SPAN_ID,
     USER_FEEDBACK_TRACE_ID,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -75,17 +80,64 @@ def chunk_relevance_score(
     return scores
 
 
-def record_feedback(trace_id: str, score: float) -> None:
+def _parse_otel_id(value: str, *, expected_length: int, field_name: str) -> int | None:
+    """Parse a hex OTel trace/span identifier if it is linkable."""
+    normalized = value.strip().lower()
+    if len(normalized) != expected_length:
+        return None
+    try:
+        parsed = int(normalized, 16)
+    except ValueError:
+        _logger.warning("Invalid %s for feedback link: %r", field_name, value)
+        return None
+    return parsed or None
+
+
+def _feedback_link(trace_id: str, span_id: str | None) -> list[Link]:
+    """Build an OTel link for feedback when trace and span IDs are valid."""
+    if span_id is None:
+        return []
+    parsed_trace_id = _parse_otel_id(
+        trace_id,
+        expected_length=32,
+        field_name="trace_id",
+    )
+    parsed_span_id = _parse_otel_id(
+        span_id,
+        expected_length=16,
+        field_name="span_id",
+    )
+    if parsed_trace_id is None or parsed_span_id is None:
+        return []
+    context = SpanContext(
+        trace_id=parsed_trace_id,
+        span_id=parsed_span_id,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    )
+    return [Link(context)]
+
+
+def record_feedback(trace_id: str, score: float, *, span_id: str | None = None) -> None:
     """Record user feedback as a separate span linked to the given trace.
 
     Creates a ``ragwatch.feedback`` span with ``user.feedback_score`` and
-    ``user.feedback_trace_id`` attributes.
+    ``user.feedback_trace_id`` attributes. When *span_id* is provided and both
+    IDs are valid OTel hex IDs, the feedback span is linked to the rated span.
 
     Args:
         trace_id: The trace ID of the request being rated.
         score: Feedback score (typically 0.0 – 1.0).
+        span_id: Optional span ID of the response span being rated. Enables an
+            OpenTelemetry span link when paired with a valid trace ID.
     """
     tracer = get_tracer()
-    with tracer.start_as_current_span("ragwatch.feedback") as span:
+    with tracer.start_as_current_span(
+        "ragwatch.feedback",
+        links=_feedback_link(trace_id, span_id),
+    ) as span:
         safe_set_attribute(span, USER_FEEDBACK_SCORE, score)
         safe_set_attribute(span, USER_FEEDBACK_TRACE_ID, trace_id)
+        if span_id is not None:
+            safe_set_attribute(span, USER_FEEDBACK_SPAN_ID, span_id)

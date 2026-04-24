@@ -83,7 +83,7 @@ def func(state): ...
 
 ---
 
-### `record_feedback(trace_id, score)`
+### `record_feedback(trace_id, score, span_id=None)`
 
 Record user feedback as a separate span linked to a trace.
 
@@ -91,6 +91,11 @@ Record user feedback as a separate span linked to a trace.
 from ragwatch import record_feedback
 
 record_feedback(trace_id="abc123", score=0.85)
+record_feedback(
+    trace_id="00000000000000000000000000000001",
+    span_id="0000000000000002",
+    score=0.85,
+)
 ```
 
 **Parameters:**
@@ -99,6 +104,7 @@ record_feedback(trace_id="abc123", score=0.85)
 |-----------|------|-------------|
 | `trace_id` | `str` | Trace ID of the request being rated |
 | `score` | `float` | Feedback score (typically 0.0 – 1.0) |
+| `span_id` | `str \| None` | Optional response span ID for OpenTelemetry span links |
 
 ---
 

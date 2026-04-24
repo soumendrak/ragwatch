@@ -18,6 +18,7 @@ from ragwatch.instrumentation.evaluators import (
 from ragwatch.instrumentation.semconv import (
     CHUNK_RELEVANCE_SCORE,
     USER_FEEDBACK_SCORE,
+    USER_FEEDBACK_SPAN_ID,
     USER_FEEDBACK_TRACE_ID,
 )
 
@@ -114,6 +115,42 @@ def test_record_feedback_sets_attribute():
     )
     assert span.attributes[USER_FEEDBACK_SCORE] == 0.85
     assert span.attributes[USER_FEEDBACK_TRACE_ID] == "abc123"
+
+
+def test_record_feedback_links_to_span_when_ids_are_valid():
+    exporter = InMemorySpanExporter()
+    configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter), _force_flush=True
+    )
+
+    trace_id = "0" * 31 + "1"
+    span_id = "0" * 15 + "2"
+    record_feedback(trace_id=trace_id, span_id=span_id, score=0.9)
+
+    span = next(
+        s for s in exporter.get_finished_spans() if s.name == "ragwatch.feedback"
+    )
+    assert span.attributes[USER_FEEDBACK_TRACE_ID] == trace_id
+    assert span.attributes[USER_FEEDBACK_SPAN_ID] == span_id
+    assert len(span.links) == 1
+    assert span.links[0].context.trace_id == int(trace_id, 16)
+    assert span.links[0].context.span_id == int(span_id, 16)
+
+
+def test_record_feedback_keeps_attribute_for_invalid_link_ids():
+    exporter = InMemorySpanExporter()
+    configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter), _force_flush=True
+    )
+
+    record_feedback(trace_id="not-a-trace", span_id="not-a-span", score=0.4)
+
+    span = next(
+        s for s in exporter.get_finished_spans() if s.name == "ragwatch.feedback"
+    )
+    assert span.attributes[USER_FEEDBACK_TRACE_ID] == "not-a-trace"
+    assert span.attributes[USER_FEEDBACK_SPAN_ID] == "not-a-span"
+    assert len(span.links) == 0
 
 
 def test_cosine_similarity_zero_vector():

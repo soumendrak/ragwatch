@@ -128,8 +128,15 @@ Link user satisfaction scores back to specific traces:
 ```python
 from ragwatch import record_feedback
 
-# After the user rates a response
+# After the user rates a response. trace_id-only keeps attribute correlation.
 record_feedback(trace_id="abc123def456", score=0.85)
+
+# Provide span_id as well to create an OpenTelemetry span link.
+record_feedback(
+    trace_id="00000000000000000000000000000001",
+    span_id="0000000000000002",
+    score=0.85,
+)
 ```
 
 ### How It Works
@@ -140,8 +147,9 @@ record_feedback(trace_id="abc123def456", score=0.85)
 |-----------|------|-------------|
 | `user.feedback_score` | `float` | The user's rating (typically 0.0 – 1.0) |
 | `user.feedback_trace_id` | `str` | The trace ID of the request being rated |
+| `user.feedback_span_id` | `str` | Optional span ID of the response span being rated |
 
-This separate span allows you to correlate user satisfaction with retrieval quality scores in your OTel backend.
+This separate span allows you to correlate user satisfaction with retrieval quality scores in your OTel backend. When both `trace_id` and `span_id` are valid OTel hex identifiers, RAGWatch also adds an OpenTelemetry span link.
 
 ### Example: Feedback in a Web API
 

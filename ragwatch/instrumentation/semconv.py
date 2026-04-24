@@ -86,6 +86,7 @@ ERROR_TYPE = "error.type"
 RESPONSE_LENGTH = "response.length"
 USER_FEEDBACK_SCORE = "user.feedback_score"
 USER_FEEDBACK_TRACE_ID = "user.feedback_trace_id"
+USER_FEEDBACK_SPAN_ID = "user.feedback_span_id"
 
 # --- RAGWatch metadata -----------------------
 RAGWATCH_SDK_VERSION = "ragwatch.sdk.version"
