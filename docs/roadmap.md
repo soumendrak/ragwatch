@@ -16,7 +16,8 @@ stable before adding more framework integrations.
 - Finalize stable vs experimental attribute groups. Initial machine-readable
   groups are available via `STANDARD_ATTRIBUTES`, `STABLE_ATTRIBUTES`,
   `EXPERIMENTAL_ATTRIBUTES`, and `get_attribute_stability()`.
-- Add compatibility tests for documented telemetry examples.
+- Add compatibility tests for documented telemetry examples. README-style
+  minimal RAG, LangGraph decorator, and runtime tracing examples are covered.
 - Clarify feedback correlation semantics and add span-link support where useful.
 
 ## v0.6 Adapter Expansion
