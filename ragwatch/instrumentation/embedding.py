@@ -44,7 +44,7 @@ def set_embedding_attributes(
 
 
 def store_embedding_in_context(result: Any) -> None:
-    """If *result* looks like an embedding vector, store it in thread-local context.
+    """If *result* looks like an embedding vector, store it in the query context.
 
     Args:
         result: Return value from the decorated function.

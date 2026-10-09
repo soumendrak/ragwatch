@@ -39,7 +39,7 @@
 ### `chunk_relevance_score` Plumbing (single-process only)
 
 1. `embedding.py` computes query embedding → stores in OTel `Context` (not baggage)
-2. `context.py` manages thread-local storage for query embedding
+2. `context.py` manages `ContextVar` storage for query embedding
 3. `retrieval.py` reads context → computes cosine similarity → sets `chunk.relevance_score`
 4. **Supported dimensions**: up to 512-dim
 
@@ -64,7 +64,7 @@ ragwatch/
 │   ├── tracer.py            # TracerProvider setup + singleton
 │   ├── runtime.py           # RAGWatchRuntime scoped accessor
 │   ├── span_kinds.py        # SpanKind enum (OpenInference standard)
-│   └── context.py           # Thread-local context for query embedding
+│   └── context.py           # ContextVar context for query embedding
 ├── instrumentation/
 │   ├── __init__.py
 │   ├── decorators.py        # @trace (sync + async, orchestration + failure isolation)
