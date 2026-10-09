@@ -17,7 +17,7 @@ _query_embedding: ContextVar[Optional[list[float]]] = ContextVar(
 
 
 def set_query_embedding(embedding: list[float]) -> None:
-    """Store *embedding* in thread-local storage.
+    """Store *embedding* in the current context.
 
     Args:
         embedding: Query embedding vector (up to 512-dim).
@@ -26,7 +26,7 @@ def set_query_embedding(embedding: list[float]) -> None:
 
 
 def get_query_embedding() -> Optional[list[float]]:
-    """Retrieve the query embedding from thread-local storage.
+    """Retrieve the query embedding from the current context.
 
     Returns:
         The stored embedding list, or ``None`` if not set.
@@ -35,5 +35,5 @@ def get_query_embedding() -> Optional[list[float]]:
 
 
 def clear_query_embedding() -> None:
-    """Remove the stored query embedding from thread-local storage."""
+    """Remove the stored query embedding from the current context."""
     _query_embedding.set(None)

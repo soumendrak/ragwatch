@@ -1,7 +1,8 @@
-"""Tests for ragwatch.core.context — thread-local query embedding storage."""
+"""Tests for ragwatch.core.context — context-local query embedding storage."""
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 from ragwatch.core.context import (
@@ -54,4 +55,18 @@ def test_context_is_thread_local():
 
 def test_context_returns_none_when_not_set():
     clear_query_embedding()
+    assert get_query_embedding() is None
+
+
+async def test_context_is_isolated_across_concurrent_tasks():
+    async def pipeline(i: int) -> list[float] | None:
+        set_query_embedding([float(i)] * 3)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return get_query_embedding()
+
+    clear_query_embedding()
+    results = await asyncio.gather(*(pipeline(i) for i in range(5)))
+
+    assert results == [[float(i)] * 3 for i in range(5)]
     assert get_query_embedding() is None
