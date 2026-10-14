@@ -36,6 +36,9 @@ langgraph = [
 crewai = [
     "crewai==0.41.0",
 ]
+llamaindex = [
+    "llama-index-core>=0.12",
+]
 dev = [
     "pytest==8.0",
     "pytest-asyncio>=0.23.5",

@@ -10,6 +10,7 @@
 pip install ragwatch                  # Core SDK
 pip install ragwatch[langgraph]       # + LangGraph adapter
 pip install ragwatch[crewai]          # + CrewAI adapter
+pip install ragwatch[llamaindex]      # + LlamaIndex adapter
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
@@ -18,6 +19,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add ragwatch                       # Core SDK
 uv add ragwatch --extra langgraph     # + LangGraph adapter
 uv add ragwatch --extra crewai        # + CrewAI adapter
+uv add ragwatch --extra llamaindex    # + LlamaIndex adapter (see docs/llamaindex.md)
 ```
 
 ---
