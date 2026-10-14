@@ -186,12 +186,87 @@ def test_handler_query_embedding_scores_unscored_nodes(_setup):
 
 def test_handler_records_exception(_setup):
     h = RagWatchCallbackHandler()
-    h.on_event_start("llm", {"messages": ["hi"]}, event_id="l")
-    h.on_event_end("llm", {"exception": ValueError("boom")}, event_id="l")
-    span = _spans(_setup)["llama_index.llm"]
+    h.on_event_start("query", {"query_str": "hi"}, event_id="q")
+    h.on_event_end("query", {"exception": ValueError("boom")}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
     assert span.attributes[ERROR_TYPE] == "ValueError"
-    assert span.attributes[INPUT_VALUE] == "['hi']"
+    assert span.attributes[INPUT_VALUE] == "hi"
     assert not span.status.is_ok
+
+
+def test_handler_skips_llm_and_reparents_children(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("llm", {"messages": ["hi"]}, event_id="l", parent_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="l")
+    h.on_event_end("templating", {}, event_id="t")
+    h.on_event_end("llm", {"response": "x"}, event_id="l")
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    spans = _spans(_setup)
+    assert "llama_index.llm" not in spans
+    child = spans["llama_index.templating"]
+    assert child.parent.span_id == spans["llama_index.query"].context.span_id
+
+
+def test_handler_function_call_is_tool_span(_setup):
+    h = RagWatchCallbackHandler()
+    tool = SimpleNamespace(name="search")
+    h.on_event_start(
+        "function_call", {"function_call": {"q": 1}, "tool": tool}, event_id="f"
+    )
+    h.on_event_end("function_call", {"function_call_response": "found"}, "f")
+    span = _spans(_setup)["llama_index.function_call"]
+    assert span.attributes[OPENINFERENCE_SPAN_KIND] == "TOOL"
+    assert span.attributes["tool.name"] == "search"
+    assert span.attributes[INPUT_VALUE] == "{'q': 1}"
+    assert span.attributes[OUTPUT_VALUE] == "found"
+
+
+def test_handler_does_not_drain_streaming_response(_setup):
+    def gen():
+        yield "tok"
+
+    stream = SimpleNamespace(response_gen=gen())
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": stream}, event_id="q")
+    assert list(stream.response_gen) == ["tok"]
+    assert OUTPUT_VALUE not in _spans(_setup)["llama_index.query"].attributes
+
+
+def test_handler_respects_global_auto_track_io_off(_setup, monkeypatch):
+    import ragwatch
+
+    cfg = RAGWatchConfig(service_name="t", global_auto_track_io=False)
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "secret"}, event_id="q")
+    h.on_event_end("query", {"response": "answer"}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
+    assert INPUT_VALUE not in span.attributes
+    assert OUTPUT_VALUE not in span.attributes
+    assert span.attributes[RESPONSE_LENGTH] == 6
+
+
+def test_handler_does_not_reuse_previous_query_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "a"}, event_id="r1")
+    h.on_event_start("embedding", {}, event_id="e1", parent_id="r1")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e1")
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r1")
+    # Second retrieval: unscored nodes and no embedding event of its own.
+    h.on_event_start("retrieve", {"query_str": "b"}, event_id="r2")
+    nodes = [_node("x", embedding=[1.0, 0.0])]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r2")
+    spans = [s for s in _setup.get_finished_spans() if s.name.endswith("retrieve")]
+    assert CHUNK_RELEVANCE_SCORES not in spans[-1].attributes
+    assert spans[-1].attributes[RETRIEVAL_CHUNKS_RETURNED] == 1
+
+
+def test_decorators_resolve_llamaindex_adapter():
+    from ragwatch.instrumentation.decorators import _resolve_adapter
+
+    assert isinstance(_resolve_adapter("llamaindex"), LlamaIndexAdapter)
 
 
 def test_handler_unknown_end_is_ignored(_setup):

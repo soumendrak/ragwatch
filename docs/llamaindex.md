@@ -38,11 +38,15 @@ response = index.as_query_engine().query("What is RAGWatch?")
 | `retrieve`, `reranking` | `llama_index.retrieve` / `llama_index.reranking` | `RETRIEVER` | `retrieval.chunks.returned`, `chunk.relevance_scores`, `retrieval.chunk.{i}.*` |
 | `synthesize` | `llama_index.synthesize` | `CHAIN` | `output.value`, `response.length` |
 | `embedding` | `llama_index.embedding` | `EMBEDDING` | `embedding.model.name`, `embedding.dimensions` |
-| `llm` | `llama_index.llm` | `LLM` | `input.value`, `output.value` |
+| `function_call` | `llama_index.function_call` | `TOOL` | `tool.name`, `input.value`, `output.value` |
+| `llm` | — (skipped) | — | Leave LLM spans to OpenLLMetry; children are re-parented to the nearest traced ancestor |
 | any other | `llama_index.<event>` | `CHAIN` | — |
 
 - Spans are parented through LlamaIndex's own event `parent_id`, so concurrent asyncio queries never share spans.
 - Retrieved nodes use the retriever's scores. If a node has no score, RAGWatch falls back to cosine similarity between the node embedding and the query embedding captured from the `embedding` event under the query/retrieve.
+- `input.value` / `output.value` respect `RAGWatchConfig(global_auto_track_io=False)`.
+- Streaming responses (`StreamingResponse`, `AsyncStreamingResponse`) are never read, so the caller still gets the full stream; their spans carry no `output.value`.
+- The fallback query embedding is scoped to the LlamaIndex query/retrieve event it was computed under, so a later retrieval never reuses a previous query's embedding.
 - Exceptions reported by LlamaIndex set the span status to `ERROR`, record the exception and set `error.type`.
 - Errors inside the handler are logged and swallowed, unless strict mode is on.
 
@@ -71,7 +75,7 @@ async def chat(message: str):
     return await chat_engine_obj.achat(message)
 ```
 
-Each decorator works with or without arguments, supports sync and async functions, and sets `adapter="llamaindex"`.
+Each decorator works with or without arguments, supports sync and async functions, and sets `adapter="llamaindex"`. The `LlamaIndexAdapter` is registered automatically on first use.
 
 ---
 

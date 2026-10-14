@@ -100,6 +100,10 @@ def _resolve_adapter(name: Optional[str]):
         from ragwatch.adapters.crewai.adapter import CrewAIAdapter
 
         adapter = CrewAIAdapter()
+    elif name == "llamaindex":
+        from ragwatch.adapters.llamaindex.adapter import LlamaIndexAdapter
+
+        adapter = LlamaIndexAdapter()
     else:
         return None
     register_adapter(adapter)
