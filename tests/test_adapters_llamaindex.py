@@ -795,3 +795,33 @@ def test_evicted_span_that_is_current_is_unwound_at_eviction(_setup):
     assert otel_trace.get_current_span() is before
     h.on_event_end("embedding", {"embeddings": [[1.0]]}, event_id="e")
     assert otel_trace.get_current_span() is before
+
+
+async def test_late_end_unwinds_event_evicted_by_another_task(_setup):
+    # #11 item 3: task B evicts task A's attached event; B can't detach A's
+    # token, so A's own (late) end callback must unwind it.
+    import asyncio
+
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler(max_open_events=1)
+    a_started, b_started = asyncio.Event(), asyncio.Event()
+
+    async def task_a():
+        before = otel_trace.get_current_span()
+        h.on_event_start("query", {}, event_id="qa")
+        a_started.set()
+        await b_started.wait()
+        assert "qa" not in h._events  # evicted by task B
+        h.on_event_end("query", {}, event_id="qa")
+        return otel_trace.get_current_span() is before
+
+    async def task_b():
+        await a_started.wait()
+        h.on_event_start("retrieve", {}, event_id="rb")  # evicts qa
+        b_started.set()
+        h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
+
+    a_ok, _ = await asyncio.gather(task_a(), task_b())
+    assert a_ok
+    assert h._evicted_tokens == {}

@@ -282,6 +282,9 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         entry = self._events.get(event_id)
         if entry is None:
             self._owners.pop(event_id, None)
+            # It may have been evicted by another task, which could not
+            # detach its context; this task owns it, so retry here.
+            self._unwind_evicted()
             return
         span = entry[0]
         try:
