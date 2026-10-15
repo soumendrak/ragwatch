@@ -658,17 +658,70 @@ def test_strict_mode_reraises_callback_errors(_setup, monkeypatch):
     assert "llama_index.query" in _spans(_setup)
 
 
-def test_unended_events_outside_trace_are_capped(_setup, monkeypatch):
-    from ragwatch.adapters.llamaindex import hooks
+def _open_untraced(h, n, prefix="c"):
+    for i in range(n):
+        h.on_event_start("chunking", {}, event_id=f"{prefix}{i}")
 
-    monkeypatch.setattr(hooks, "_MAX_OPEN_EVENTS", 4)
-    h = RagWatchCallbackHandler()
+
+def _evicted(exporter):
+    from ragwatch.adapters.llamaindex.hooks import EVICTED_ATTRIBUTE
+
+    return [
+        s for s in exporter.get_finished_spans() if s.attributes.get(EVICTED_ATTRIBUTE)
+    ]
+
+
+def test_eviction_sets_marker_on_oldest_untraced_span(_setup):
+    # E3
+    h = RagWatchCallbackHandler(max_open_events=4)
+    _open_untraced(h, 10)
     for i in range(10):
-        h.on_event_start("chunking", {}, event_id=f"c{i}")
         h.on_event_start("llm", {}, event_id=f"l{i}")
-    assert len(h._events) <= 4
+    evicted = _evicted(_setup)
+    assert len(evicted) == 6
+    assert all(s.name == "llama_index.chunking" for s in evicted)
+    assert len(h._events) == 4 and "c9" in h._events and "c0" not in h._events
     assert len(h._skipped) <= 4
-    # Evicted spans are ended, not leaked; the newest stays open.
-    ended = [s for s in _setup.get_finished_spans() if s.name == "llama_index.chunking"]
-    assert len(ended) == 6
-    assert "c9" in h._events
+
+
+def test_cap_value_controls_eviction(_setup):
+    # E2
+    h = RagWatchCallbackHandler(max_open_events=8)
+    _open_untraced(h, 10)
+    assert len(_evicted(_setup)) == 2
+    h = RagWatchCallbackHandler()
+    _open_untraced(h, 500, prefix="d")
+    assert len(_evicted(_setup)) == 2  # default cap is far above 500
+    with pytest.raises(ValueError):
+        RagWatchCallbackHandler(max_open_events=0)
+
+
+def test_traced_events_are_never_evicted(_setup):
+    # E5
+    h = RagWatchCallbackHandler(max_open_events=2)
+    h.start_trace("t")
+    _open_untraced(h, 10, prefix="t")
+    assert all(f"t{i}" in h._events for i in range(10))
+    assert _evicted(_setup) == []
+    h.end_trace("t")
+
+
+def test_embedding_event_is_not_made_current(_setup):
+    # Async embedding batches start every event before awaiting any (#7).
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    query_span = otel_trace.get_current_span()
+    for i in range(3):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="q")
+        assert otel_trace.get_current_span() is query_span
+    for i in range(3):
+        h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id=f"e{i}")
+        assert otel_trace.get_current_span() is query_span
+    h.on_event_end("query", {}, event_id="q")
+    spans = _spans(_setup)
+    assert (
+        spans["llama_index.embedding"].parent.span_id
+        == spans["llama_index.query"].context.span_id
+    )

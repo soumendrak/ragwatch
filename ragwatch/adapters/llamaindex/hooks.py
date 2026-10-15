@@ -82,10 +82,21 @@ _DEFAULT_SKIPPED = frozenset({"llm"})
 # Events whose single embedding is the query embedding, not an ingestion batch.
 _QUERY_ANCESTORS = frozenset({"query", "retrieve"})
 
-#: Most events started outside ``start_trace`` that may stay open at once.
-#: Events whose end never arrives would otherwise accumulate forever; the
-#: oldest is ended and dropped once the cap is exceeded.
-_MAX_OPEN_EVENTS = 256
+#: Default for ``max_open_events``: how many events started outside
+#: ``start_trace`` may stay open at once. Events whose end never arrives
+#: would otherwise accumulate forever; past the cap the oldest is ended
+#: early. Large enough that async batch ingestion (which starts every
+#: embedding event before awaiting any) never reaches it in practice.
+DEFAULT_MAX_OPEN_EVENTS = 10_000
+
+#: Set to ``True`` on a span ended early because the open-event cap was hit.
+EVICTED_ATTRIBUTE = "ragwatch.callback.evicted"
+
+# Leaf events that are not made the current OTel context. LlamaIndex's
+# async embedding batches start every event before awaiting any of them,
+# so attaching each would stack sibling contexts and unwind them out of
+# order.
+_UNATTACHED_KINDS = frozenset({"embedding"})
 
 
 class _Chunk:
@@ -161,7 +172,11 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         self,
         event_starts_to_ignore: Optional[List[Any]] = None,
         event_ends_to_ignore: Optional[List[Any]] = None,
+        max_open_events: int = DEFAULT_MAX_OPEN_EVENTS,
     ) -> None:
+        if max_open_events < 1:
+            raise ValueError("max_open_events must be at least 1")
+        self.max_open_events = max_open_events
         self.event_starts_to_ignore = tuple(event_starts_to_ignore or ())
         self.event_ends_to_ignore = tuple(event_ends_to_ignore or ())
         self._ignored_ends = frozenset(_value(e) for e in self.event_ends_to_ignore)
@@ -204,22 +219,26 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         return event_id
 
     def _evict_untraced(self) -> None:
-        """Keep events started outside start_trace under ``_MAX_OPEN_EVENTS``."""
+        """Keep events started outside start_trace under ``max_open_events``."""
+        cap = self.max_open_events
+        if len(self._events) > cap:
+            self._evict_events(cap)
+        if len(self._skipped) > cap:
+            untraced_skipped = [e for e in self._skipped if e not in self._owners]
+            for event_id in untraced_skipped[: max(0, len(untraced_skipped) - cap)]:
+                self._skipped.pop(event_id, None)
+
+    def _evict_events(self, cap: int) -> None:
         untraced = [e for e in self._events if e not in self._owners]
-        for event_id in untraced[: max(0, len(untraced) - _MAX_OPEN_EVENTS)]:
+        for event_id in untraced[: max(0, len(untraced) - cap)]:
             span = self._events.pop(event_id)[0]
             # Don't restore its embedding or detach its context token: both
             # would clobber the state of newer, still-running events.
             self._previous_embeddings.pop(event_id, None)
             self._query_embeddings.pop(event_id, None)
             self._tokens.pop(event_id, None)
-            safe_set_attribute(span, "ragwatch.callback.evicted", True)
+            safe_set_attribute(span, EVICTED_ATTRIBUTE, True)
             span.end()
-        untraced_skipped = [e for e in self._skipped if e not in self._owners]
-        for event_id in untraced_skipped[
-            : max(0, len(untraced_skipped) - _MAX_OPEN_EVENTS)
-        ]:
-            self._skipped.pop(event_id, None)
 
     def on_event_end(
         self,
@@ -320,10 +339,12 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         context = otel_trace.set_span_in_context(parent[0]) if parent else None
         span = get_tracer().start_span(f"llama_index.{kind}", context=context)
         # Make the span current for the event's lifetime so provider spans
-        # (e.g. OpenLLMetry) started during it nest beneath it.
-        self._tokens[event_id] = otel_context.attach(
-            otel_trace.set_span_in_context(span)
-        )
+        # (e.g. OpenLLMetry) started during it nest beneath it. Embedding
+        # leaves are not attached (see _UNATTACHED_KINDS).
+        if kind not in _UNATTACHED_KINDS:
+            self._tokens[event_id] = otel_context.attach(
+                otel_trace.set_span_in_context(span)
+            )
         # Register before any fallible payload processing so a failure
         # below still leaves the span reachable by on_event_end/end_trace.
         self._events[event_id] = (span, kind, parent_id, "")

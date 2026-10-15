@@ -34,3 +34,10 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -v
+
+      - name: Run LlamaIndex integration tests (real llama-index-core)
+        run: >
+          uv run --no-project --python ${{ matrix.python-version }}
+          --with . --with "llama-index-core>=0.12"
+          --with pytest==8.0 --with pytest-asyncio
+          pytest -v tests/test_llamaindex_integration.py
