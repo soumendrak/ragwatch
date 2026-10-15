@@ -725,3 +725,73 @@ def test_embedding_event_is_not_made_current(_setup):
         spans["llama_index.embedding"].parent.span_id
         == spans["llama_index.query"].context.span_id
     )
+
+
+def test_eviction_releases_the_event_context_token(_setup):
+    # N9: an evicted event must not keep its token in the live map.
+    h = RagWatchCallbackHandler(max_open_events=2)
+    _open_untraced(h, 3)
+    assert "c0" not in h._events
+    assert "c0" not in h._tokens
+    assert set(h._tokens) == {"c1", "c2"}
+
+
+def test_retrieve_event_is_made_current(_setup):
+    # N11: only embedding leaves are left unattached.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "q"}, event_id="r")
+    assert otel_trace.get_current_span().name == "llama_index.retrieve"
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    assert otel_trace.get_current_span() is before
+
+
+def test_only_oldest_untraced_skipped_entries_are_pruned(_setup):
+    # N6
+    import contextvars
+
+    h = RagWatchCallbackHandler(max_open_events=2)
+
+    def traced():
+        h.start_trace("t")  # task-local: the outer context stays untraced
+        for i in range(3):
+            h.on_event_start("llm", {}, event_id=f"traced{i}")
+
+    contextvars.copy_context().run(traced)
+    for i in range(4):
+        h.on_event_start("llm", {}, event_id=f"u{i}")
+    assert set(h._skipped) == {"traced0", "traced1", "traced2", "u2", "u3"}
+
+
+def test_evicted_context_is_unwound_once_newer_events_end(_setup):
+    # #11: an evicted span must not stay current after the events above it end.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler(max_open_events=2)
+    h.on_event_start("query", {}, event_id="q")
+    h.on_event_start("retrieve", {}, event_id="r", parent_id="q")
+    h.on_event_start("synthesize", {}, event_id="s", parent_id="q")  # evicts q
+    h.on_event_start("templating", {}, event_id="t", parent_id="q")  # evicts r
+    for event_id, kind in [("t", "templating"), ("s", "synthesize")]:
+        h.on_event_end(kind, {}, event_id=event_id)
+    assert otel_trace.get_current_span() is before
+    h.on_event_end("retrieve", {}, event_id="r")
+    h.on_event_end("query", {}, event_id="q")
+    assert otel_trace.get_current_span() is before
+    assert h._evicted_tokens == {}
+
+
+def test_evicted_span_that_is_current_is_unwound_at_eviction(_setup):
+    # #11: nothing attached above it, so it is detached immediately.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler(max_open_events=1)
+    h.on_event_start("query", {}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")  # evicts q
+    assert otel_trace.get_current_span() is before
+    h.on_event_end("embedding", {"embeddings": [[1.0]]}, event_id="e")
+    assert otel_trace.get_current_span() is before

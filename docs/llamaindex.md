@@ -57,8 +57,9 @@ response = index.as_query_engine().query("What is RAGWatch?")
 Events started outside a `start_trace`/`end_trace` pair are ended only by
 their own end callback. To bound memory if an end never arrives, at most
 `max_open_events` such events (default 10,000) are kept open; beyond that the
-oldest is ended early and marked `ragwatch.callback.evicted=true`. Events
-inside a trace are never evicted. Set it with
+oldest is ended early and marked `ragwatch.callback.evicted=true`. Its
+context is detached once the events attached after it have ended, so the
+ended span does not stay current. Events inside a trace are never evicted. Set it with
 `RagWatchCallbackHandler(max_open_events=...)`.
 
 Embedding events are not made the current OpenTelemetry context, because

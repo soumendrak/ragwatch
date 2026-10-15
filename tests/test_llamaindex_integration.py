@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
-pytest.importorskip("llama_index.core")
+# CI sets RAGWATCH_REQUIRE_LLAMAINDEX=1 so a missing install fails loudly
+# instead of silently skipping these tests.
+if os.environ.get("RAGWATCH_REQUIRE_LLAMAINDEX") != "1":
+    pytest.importorskip("llama_index.core")
 
 from llama_index.core import Document  # noqa: E402
 from llama_index.core.callbacks import CallbackManager  # noqa: E402

@@ -166,7 +166,20 @@ _CURRENT_TRACE: contextvars.ContextVar[Optional[object]] = contextvars.ContextVa
 
 
 class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
-    """LlamaIndex callback handler that emits RAGWatch/OpenInference spans."""
+    """LlamaIndex callback handler that emits RAGWatch/OpenInference spans.
+
+    Args:
+        event_starts_to_ignore: Event types LlamaIndex should not start.
+        event_ends_to_ignore: Event types whose end is suppressed; these get
+            no span.
+        max_open_events: Most events started outside ``start_trace`` that
+            may be open at once (default 10,000). Past it the oldest is ended
+            early with ``ragwatch.callback.evicted=true``. Its context is
+            detached as soon as the events attached after it have ended, so
+            an ended span does not stay current. Its query embedding is not
+            restored, and a late end callback for it is ignored. Events
+            inside a trace are never evicted.
+    """
 
     def __init__(
         self,
@@ -194,6 +207,8 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         self._owners: Dict[str, object] = {}
         # trace marker → token restoring the previous marker at end_trace
         self._trace_tokens: Dict[int, Any] = {}
+        # evicted span_id → its context token, detached once it is on top
+        self._evicted_tokens: Dict[int, Any] = {}
 
     # -- CallbackManager protocol -------------------------------------------
 
@@ -232,13 +247,29 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         untraced = [e for e in self._events if e not in self._owners]
         for event_id in untraced[: max(0, len(untraced) - cap)]:
             span = self._events.pop(event_id)[0]
-            # Don't restore its embedding or detach its context token: both
-            # would clobber the state of newer, still-running events.
+            # Don't restore its embedding: that would clobber newer events.
             self._previous_embeddings.pop(event_id, None)
             self._query_embeddings.pop(event_id, None)
-            self._tokens.pop(event_id, None)
+            # Its context token can't be detached yet (newer events were
+            # attached on top); detach it once it is current again.
+            token = self._tokens.pop(event_id, None)
+            if token is not None and len(self._evicted_tokens) < cap:
+                self._evicted_tokens[span.get_span_context().span_id] = token
             safe_set_attribute(span, EVICTED_ATTRIBUTE, True)
             span.end()
+        self._unwind_evicted()
+
+    def _unwind_evicted(self) -> None:
+        """Detach evicted spans' contexts that are now on top, oldest last."""
+        while self._evicted_tokens:
+            current = otel_trace.get_current_span().get_span_context().span_id
+            token = self._evicted_tokens.pop(current, None)
+            if token is None:
+                return
+            try:
+                otel_context.detach(token)
+            except Exception:  # attached in another context; nothing to undo
+                return
 
     def on_event_end(
         self,
@@ -277,6 +308,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
                 otel_context.detach(token)
             except Exception:  # ended in a different context; nothing to undo
                 pass
+            self._unwind_evicted()
         if entry is not None:
             entry[0].end()
 
