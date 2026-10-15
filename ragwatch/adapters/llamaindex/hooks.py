@@ -17,6 +17,8 @@ parented through LlamaIndex's own ``parent_id``, which LlamaIndex tracks in a
 
 from __future__ import annotations
 
+import contextvars
+
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -107,6 +109,8 @@ def record_nodes(
     (``None`` means: use the one stored in the current context); if neither
     is available, only the returned-chunk count is recorded.
     """
+    if not span.is_recording():
+        return  # sampled out: skip node materialization and scoring
     if nodes is None or isinstance(nodes, (str, bytes, dict)):
         return
     try:
@@ -140,6 +144,11 @@ def record_nodes(
     record_chunks(results, query=query, span=span)
 
 
+_CURRENT_TRACE: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
+    "ragwatch_llamaindex_trace", default=None
+)
+
+
 class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
     """LlamaIndex callback handler that emits RAGWatch/OpenInference spans."""
 
@@ -161,6 +170,10 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         self._tokens: Dict[str, Any] = {}
         # query/retrieve event_id → ambient query embedding to restore at end
         self._previous_embeddings: Dict[str, Optional[List[float]]] = {}
+        # event_id → trace marker active (task-locally) when it started
+        self._owners: Dict[str, object] = {}
+        # trace marker → token restoring the previous marker at end_trace
+        self._trace_tokens: Dict[int, Any] = {}
 
     # -- CallbackManager protocol -------------------------------------------
 
@@ -172,6 +185,9 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         parent_id: str = "",
         **kwargs: Any,
     ) -> str:
+        owner = _CURRENT_TRACE.get()
+        if owner is not None:
+            self._owners[event_id] = owner
         try:
             self._start(_value(event_type), payload or {}, event_id, parent_id)
         except Exception as exc:
@@ -189,6 +205,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         self._skipped.pop(event_id, None)
         entry = self._events.get(event_id)
         if entry is None:
+            self._owners.pop(event_id, None)
             return
         span = entry[0]
         try:
@@ -201,6 +218,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
     def _finish(self, event_id: str) -> None:
         """End the event's span and undo its context changes."""
         entry = self._events.pop(event_id, None)
+        self._owners.pop(event_id, None)
         self._query_embeddings.pop(event_id, None)
         if event_id in self._previous_embeddings:
             previous = self._previous_embeddings.pop(event_id)
@@ -218,7 +236,13 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             entry[0].end()
 
     def start_trace(self, trace_id: Optional[str] = None) -> None:
-        """Traces map onto the caller's current OTel span; nothing to do."""
+        """Mark events started in this task as belonging to a new trace.
+
+        The marker lives in a ``ContextVar`` so concurrent ``aquery()``
+        tasks sharing one ``CallbackManager`` keep separate ownership.
+        """
+        marker = object()
+        self._trace_tokens[id(marker)] = (_CURRENT_TRACE.set(marker), marker)
 
     def end_trace(
         self,
@@ -227,20 +251,26 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
     ) -> None:
         """End this trace's spans whose events never ended.
 
-        Only events listed in *trace_map* (LlamaIndex's map of this trace)
-        are finalized, so a concurrent trace sharing the handler keeps
-        its open spans.
+        Only events started under this task's ``start_trace`` marker are
+        finalized. *trace_map* is ignored: LlamaIndex keeps it on the shared
+        manager, so it can list another concurrent task's events.
         """
-        if not trace_map:
+        marker = _CURRENT_TRACE.get()
+        if marker is None:
             return
-        owned = set(trace_map)
-        for children in trace_map.values():
-            owned.update(children)
+        owned = [e for e, m in self._owners.items() if m is marker]
         for event_id in reversed(list(self._events)):
             if event_id in owned:
                 self._finish(event_id)
         for event_id in owned:
             self._skipped.pop(event_id, None)
+            self._owners.pop(event_id, None)
+        token, _ = self._trace_tokens.pop(id(marker), (None, None))
+        if token is not None:
+            try:
+                _CURRENT_TRACE.reset(token)
+            except ValueError:  # ended in a different context
+                _CURRENT_TRACE.set(None)
 
     # -- internals -----------------------------------------------------------
 
@@ -268,6 +298,9 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         self._tokens[event_id] = otel_context.attach(
             otel_trace.set_span_in_context(span)
         )
+        # Register before any fallible payload processing so a failure
+        # below still leaves the span reachable by on_event_end/end_trace.
+        self._events[event_id] = (span, kind, parent_id, "")
         safe_set_attribute(
             span, OPENINFERENCE_SPAN_KIND, _SPAN_KINDS.get(kind, SpanKind.CHAIN.value)
         )
@@ -334,7 +367,10 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             if text is None:
                 return
             if _effective_auto_track_io(True):
-                safe_set_attribute(span, OUTPUT_VALUE, _io_text(text))
+                # Scrub the raw structure so key-based redaction still sees
+                # nested keys; only plain text/response objects use the text.
+                raw = output if isinstance(output, (dict, list, tuple)) else text
+                safe_set_attribute(span, OUTPUT_VALUE, _io_text(raw))
             if kind in ("query", "synthesize"):
                 safe_set_attribute(span, RESPONSE_LENGTH, len(text))
 

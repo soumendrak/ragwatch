@@ -359,6 +359,7 @@ def test_handler_no_fallback_score_with_multiple_query_embeddings(_setup):
 
 def test_handler_start_only_exception_and_end_trace(_setup):
     h = RagWatchCallbackHandler()
+    h.start_trace("t")
     h.on_event_start("query", {"query_str": "q"}, event_id="q")
     h.on_event_start("exception", {"exception": RuntimeError("x")}, "x", "q")
     h.end_trace("t", {"root": ["q"], "q": ["x"]})
@@ -413,16 +414,53 @@ def test_decorator_records_plain_output(_setup):
 
 
 def test_end_trace_only_finalizes_its_own_events(_setup):
+    import asyncio
+
     h = RagWatchCallbackHandler()
-    h.on_event_start("query", {"query_str": "a"}, event_id="qa")
-    h.on_event_start("query", {"query_str": "b"}, event_id="qb")
-    h.on_event_start("retrieve", {}, event_id="rb", parent_id="qb")
-    h.end_trace("a", {"root": ["qa"]})
-    names = [s.name for s in _setup.get_finished_spans()]
-    assert names == ["llama_index.query"]
-    h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
-    h.on_event_end("query", {"response": "x"}, event_id="qb")
+    shared_map = {"root": ["qa", "qb"], "qb": ["rb"]}  # manager-level, shared
+    b_started = asyncio.Event()
+    a_done = asyncio.Event()
+
+    async def task_a():
+        h.start_trace("a")
+        h.on_event_start("query", {"query_str": "a"}, event_id="qa")
+        await b_started.wait()
+        h.end_trace("a", shared_map)
+        a_done.set()
+
+    async def task_b():
+        h.start_trace("b")
+        h.on_event_start("query", {"query_str": "b"}, event_id="qb")
+        h.on_event_start("retrieve", {}, event_id="rb", parent_id="qb")
+        b_started.set()
+        await a_done.wait()
+        assert [s.name for s in _setup.get_finished_spans()] == ["llama_index.query"]
+        h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
+        h.on_event_end("query", {"response": "x"}, event_id="qb")
+        h.end_trace("b", shared_map)
+
+    async def main():
+        await asyncio.gather(task_a(), task_b())
+
+    asyncio.run(main())
     assert len(_setup.get_finished_spans()) == 3
+
+
+def test_function_call_output_is_scrubbed(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("function_call", {}, event_id="f")
+    out = {"function_call_response": {"data": {"api_key": "sk-secret"}}}
+    h.on_event_end("function_call", out, "f")
+    value = _spans(_setup)["llama_index.function_call"].attributes[OUTPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value
 
 
 def test_streaming_agent_chat_response_is_not_read(_setup):
@@ -494,3 +532,38 @@ def test_ignored_end_event_creates_no_span(_setup):
         spans["llama_index.retrieve"].parent.span_id
         == spans["llama_index.query"].context.span_id
     )
+
+
+def test_start_failure_leaves_span_finishable(_setup):
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    assert "llama_index.query" in _spans(_setup)
+
+
+def test_record_nodes_skips_non_recording_span():
+    from opentelemetry.trace import NonRecordingSpan, INVALID_SPAN_CONTEXT
+
+    class Node:
+        def get_content(self):
+            raise AssertionError("must not materialize")
+
+    from ragwatch.adapters.llamaindex.hooks import record_nodes
+
+    record_nodes(NonRecordingSpan(INVALID_SPAN_CONTEXT), [Node()])
+
+
+def test_decorator_caps_plain_string_output(_setup):
+    from ragwatch.adapters.llamaindex.decorators import _StreamingSafeIO
+
+    from ragwatch.core.tracer import get_tracer
+
+    s = get_tracer().start_span("x")
+    _StreamingSafeIO().on_end(s, "y" * 10_000)
+    s.end()
+    value = _spans(_setup)["x"].attributes[OUTPUT_VALUE]
+    assert len(value) < 4200
