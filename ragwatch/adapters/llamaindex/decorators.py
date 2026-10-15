@@ -11,10 +11,41 @@ from __future__ import annotations
 from typing import Any, Callable, List, Optional, TypeVar
 
 from ragwatch.core.span_kinds import SpanKind
-from ragwatch.instrumentation.decorators import trace
+from ragwatch.instrumentation.attributes import safe_set_attribute
+from ragwatch.instrumentation.decorators import _effective_auto_track_io, trace
+from ragwatch.instrumentation.io_tracker import (
+    _get_io_policy,
+    _safe_serialize,
+    track_input,
+)
+from ragwatch.instrumentation.semconv import OUTPUT_VALUE
 from ragwatch.instrumentation.span_hooks import SpanHook
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+class _StreamingSafeIO:
+    """Auto I/O tracking that never reads a streaming response.
+
+    The generic output tracker serializes results with ``str()``, which
+    drains LlamaIndex's ``StreamingResponse`` generator before the caller
+    can iterate it.  Streaming results get no ``output.value``.
+    """
+
+    def on_start(self, span: Any, args: tuple, kwargs: dict, *, context=None) -> None:
+        if _effective_auto_track_io(True):
+            track_input(span, args, kwargs)
+
+    def on_end(self, span: Any, result: Any, *, context=None) -> None:
+        from ragwatch.adapters.llamaindex.hooks import _is_streaming
+
+        if not _effective_auto_track_io(True) or _is_streaming(result):
+            return
+        policy = _get_io_policy()
+        if policy is not None:
+            result = policy.scrub_io_payload(result)
+        text = result if isinstance(result, str) else _safe_serialize(result)
+        safe_set_attribute(span, OUTPUT_VALUE, text)
 
 
 def _make(kind: SpanKind, doc: str) -> Callable[..., Any]:
@@ -25,10 +56,13 @@ def _make(kind: SpanKind, doc: str) -> Callable[..., Any]:
         auto_track_io: bool = True,
         span_hooks: Optional[List[SpanHook]] = None,
     ) -> F | Callable[[F], F]:
+        hooks = list(span_hooks or [])
+        if auto_track_io:
+            hooks.append(_StreamingSafeIO())
         options = dict(
             span_kind=kind,
-            auto_track_io=auto_track_io,
-            span_hooks=span_hooks,
+            auto_track_io=False,  # handled by _StreamingSafeIO
+            span_hooks=hooks,
             adapter="llamaindex",
         )
         if callable(func):

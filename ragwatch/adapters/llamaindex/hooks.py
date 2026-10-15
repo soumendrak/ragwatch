@@ -20,10 +20,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Span, StatusCode
 
-from ragwatch.core.context import get_query_embedding
+from ragwatch.core.context import (
+    clear_query_embedding,
+    get_query_embedding,
+    set_query_embedding,
+)
 from ragwatch.instrumentation.decorators import _effective_auto_track_io
 from ragwatch.core.span_kinds import SpanKind
 from ragwatch.core.tracer import get_tracer
@@ -96,7 +101,11 @@ def record_nodes(
     (``None`` means: use the one stored in the current context); if neither
     is available, only the returned-chunk count is recorded.
     """
-    if not isinstance(nodes, (list, tuple)):
+    if nodes is None or isinstance(nodes, (str, bytes, dict)):
+        return
+    try:
+        nodes = list(nodes)  # e.g. dict_values from RouterRetriever
+    except TypeError:
         return
     if nodes and not all(hasattr(n, "node") for n in nodes):
         return
@@ -107,10 +116,18 @@ def record_nodes(
     if any(s is None for s in scores):
         if query_embedding is None:
             query_embedding = get_query_embedding()
-        embeddings = [getattr(n.node, "embedding", None) for n in nodes]
-        if not query_embedding or any(e is None for e in embeddings):
+        missing = [n for n, s in zip(nodes, scores) if s is None]
+        if not query_embedding or any(
+            getattr(n.node, "embedding", None) is None for n in missing
+        ):
             return
-        scores = [_cosine_similarity(query_embedding, e) for e in embeddings]
+        # Keep the retriever's/reranker's scores; only fill the gaps.
+        scores = [
+            s
+            if s is not None
+            else _cosine_similarity(query_embedding, n.node.embedding)
+            for n, s in zip(nodes, scores)
+        ]
     results: List[Tuple[Any, float]] = [
         (_Chunk(n.node), float(s)) for n, s in zip(nodes, scores)
     ]
@@ -132,7 +149,11 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         # skipped event_id → its parent event_id (for re-parenting children)
         self._skipped: Dict[str, str] = {}
         # query/retrieve event_id → the query embedding captured beneath it
-        self._query_embeddings: Dict[str, List[float]] = {}
+        self._query_embeddings: Dict[str, Optional[List[float]]] = {}
+        # event_id → OTel context token (span is current for the event)
+        self._tokens: Dict[str, Any] = {}
+        # query/retrieve event_id → ambient query embedding to restore at end
+        self._previous_embeddings: Dict[str, Optional[List[float]]] = {}
 
     # -- CallbackManager protocol -------------------------------------------
 
@@ -147,7 +168,8 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         try:
             self._start(_value(event_type), payload or {}, event_id, parent_id)
         except Exception as exc:
-            self._isolate("start", exc)
+            entry = self._events.get(event_id)
+            self._isolate("start", exc, entry[0] if entry else None)
         return event_id
 
     def on_event_end(
@@ -165,11 +187,28 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         try:
             self._end(event_id, entry, payload or {})
         except Exception as exc:
-            self._isolate("end", exc)
+            self._isolate("end", exc, span)
         finally:
-            self._events.pop(event_id, None)
-            self._query_embeddings.pop(event_id, None)
-            span.end()
+            self._finish(event_id)
+
+    def _finish(self, event_id: str) -> None:
+        """End the event's span and undo its context changes."""
+        entry = self._events.pop(event_id, None)
+        self._query_embeddings.pop(event_id, None)
+        if event_id in self._previous_embeddings:
+            previous = self._previous_embeddings.pop(event_id)
+            if previous is None:
+                clear_query_embedding()
+            else:
+                set_query_embedding(previous)
+        token = self._tokens.pop(event_id, None)
+        if token is not None:
+            try:
+                otel_context.detach(token)
+            except Exception:  # ended in a different context; nothing to undo
+                pass
+        if entry is not None:
+            entry[0].end()
 
     def start_trace(self, trace_id: Optional[str] = None) -> None:
         """Traces map onto the caller's current OTel span; nothing to do."""
@@ -179,7 +218,10 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         trace_id: Optional[str] = None,
         trace_map: Optional[Dict[str, List[str]]] = None,
     ) -> None:
-        """Spans are ended per event in :meth:`on_event_end`."""
+        """End spans whose events never ended (e.g. start-only exceptions)."""
+        for event_id in reversed(list(self._events)):
+            self._finish(event_id)
+        self._skipped.clear()
 
     # -- internals -----------------------------------------------------------
 
@@ -190,9 +232,21 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             self._skipped[event_id] = parent_id
             return
         parent_id = self._resolve_parent(parent_id)
+        if kind == "exception":
+            # Start-only event: record on the nearest traced span, no new span.
+            exc = _payload(payload, "exception")
+            parent = self._events.get(parent_id)
+            if parent is not None and isinstance(exc, BaseException):
+                _record_error(parent[0], exc)
+            return
         parent = self._events.get(parent_id)
         context = otel_trace.set_span_in_context(parent[0]) if parent else None
         span = get_tracer().start_span(f"llama_index.{kind}", context=context)
+        # Make the span current for the event's lifetime so provider spans
+        # (e.g. OpenLLMetry) started during it nest beneath it.
+        self._tokens[event_id] = otel_context.attach(
+            otel_trace.set_span_in_context(span)
+        )
         safe_set_attribute(
             span, OPENINFERENCE_SPAN_KIND, _SPAN_KINDS.get(kind, SpanKind.CHAIN.value)
         )
@@ -216,6 +270,8 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             )
             set_embedding_attributes(span, model_name=model)
         self._events[event_id] = (span, kind, parent_id, query)
+        if kind in _QUERY_ANCESTORS:
+            self._previous_embeddings[event_id] = get_query_embedding()
 
     def _resolve_parent(self, parent_id: str) -> str:
         """Skip over events that were not traced (e.g. ``llm``)."""
@@ -234,9 +290,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         span, kind, parent_id, query = entry
         exc = _payload(payload, "exception")
         if isinstance(exc, BaseException):
-            span.set_status(StatusCode.ERROR, str(exc))
-            span.record_exception(exc)
-            safe_set_attribute(span, ERROR_TYPE, type(exc).__name__)
+            _record_error(span, exc)
             return
         if kind in ("retrieve", "reranking"):
             record_nodes(
@@ -266,10 +320,17 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         set_embedding_attributes(span, dimensions=len(embeddings[0]))
         if len(embeddings) == 1:
             ancestor = self._query_ancestor(parent_id)
-            if ancestor is not None:
-                embedding = list(embeddings[0])
-                self._query_embeddings[ancestor] = embedding
-                store_embedding_in_context(embedding)
+            if ancestor is None:
+                return
+            if ancestor in self._query_embeddings:
+                # Several query embeddings (e.g. multiple custom_embedding_strs)
+                # are aggregated by LlamaIndex; we can't reproduce that, so
+                # don't score against any single one of them.
+                self._query_embeddings[ancestor] = None
+                return
+            embedding = list(embeddings[0])
+            self._query_embeddings[ancestor] = embedding
+            store_embedding_in_context(embedding)
 
     def _query_ancestor(self, event_id: str) -> Optional[str]:
         """Nearest ``query``/``retrieve`` event at or above *event_id*."""
@@ -292,15 +353,33 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         while event_id in self._events and event_id not in seen:
             seen.add(event_id)
             if event_id in self._query_embeddings:
-                return self._query_embeddings[event_id]
+                return self._query_embeddings[event_id]  # None if ambiguous
             event_id = self._events[event_id][2]
         return None
 
     @staticmethod
-    def _isolate(phase: str, exc: Exception) -> None:
+    def _isolate(phase: str, exc: Exception, span: Optional[Span] = None) -> None:
         _logger.warning("RAGWatch LlamaIndex callback %s failed: %s", phase, exc)
+        if span is not None:
+            try:  # make missing telemetry distinguishable from a clean event
+                span.add_event(
+                    "ragwatch.callback_error",
+                    {
+                        "phase": phase,
+                        ERROR_TYPE: type(exc).__name__,
+                        "error.message": str(exc),
+                    },
+                )
+            except Exception:
+                pass
         if _is_strict_mode():
             raise exc
+
+
+def _record_error(span: Span, exc: BaseException) -> None:
+    span.set_status(StatusCode.ERROR, str(exc))
+    span.record_exception(exc)
+    safe_set_attribute(span, ERROR_TYPE, type(exc).__name__)
 
 
 def _value(event_type: Any) -> str:
@@ -321,12 +400,25 @@ def _materialized_text(output: Any) -> Optional[str]:
     """
     if output is None:
         return None
-    if hasattr(output, "response_gen") or hasattr(output, "async_response_gen"):
-        return None
+    if isinstance(output, str):
+        return output
+    # Already-materialized text wins: AgentChatResponse also exposes
+    # response_gen for optional dummy streaming but has its .response set.
     response = getattr(output, "response", None)
     if isinstance(response, str):
         return response
+    if hasattr(output, "response_gen") or hasattr(output, "async_response_gen"):
+        return None
     content = getattr(output, "content", None)
     if isinstance(content, str):
         return content
     return str(output)
+
+
+def _is_streaming(output: Any) -> bool:
+    """True for a LlamaIndex streaming response whose text is not yet read."""
+    if output is None or isinstance(output, str):
+        return False
+    if isinstance(getattr(output, "response", None), str):
+        return False
+    return hasattr(output, "response_gen") or hasattr(output, "async_response_gen")

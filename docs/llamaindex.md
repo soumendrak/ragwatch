@@ -42,7 +42,9 @@ response = index.as_query_engine().query("What is RAGWatch?")
 | `llm` | — (skipped) | — | Leave LLM spans to OpenLLMetry; children are re-parented to the nearest traced ancestor |
 | any other | `llama_index.<event>` | `CHAIN` | — |
 
-- Spans are parented through LlamaIndex's own event `parent_id`, so concurrent asyncio queries never share spans.
+- Spans are parented through LlamaIndex's own event `parent_id`, so concurrent asyncio queries never share spans. Each span is the current OTel span for the duration of its event, so OpenLLMetry provider spans nest beneath it.
+- Spans left open when a trace ends (e.g. after a start-only `exception` event) are ended in `end_trace()`; the exception is recorded on the nearest traced span.
+- If several query embeddings are emitted under one query (multiple `custom_embedding_strs`), no fallback score is computed. Scores that the retriever or reranker already set are never overwritten.
 - Retrieved nodes use the retriever's scores. If a node has no score, RAGWatch falls back to cosine similarity between the node embedding and the query embedding captured from the `embedding` event under the query/retrieve.
 - `input.value` / `output.value` respect `RAGWatchConfig(global_auto_track_io=False)`.
 - Streaming responses (`StreamingResponse`, `AsyncStreamingResponse`) are never read, so the caller still gets the full stream; their spans carry no `output.value`.
@@ -75,7 +77,7 @@ async def chat(message: str):
     return await chat_engine_obj.achat(message)
 ```
 
-Each decorator works with or without arguments, supports sync and async functions, and sets `adapter="llamaindex"`. The `LlamaIndexAdapter` is registered automatically on first use.
+Each decorator works with or without arguments, supports sync and async functions, and sets `adapter="llamaindex"`. The `LlamaIndexAdapter` is registered automatically on first use. Output tracking is streaming-safe: a `StreamingResponse` is returned untouched and its span has no `output.value`.
 
 ---
 

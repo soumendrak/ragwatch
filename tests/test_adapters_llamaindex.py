@@ -294,3 +294,118 @@ async def test_handler_concurrent_queries_do_not_share_spans(_setup):
             )
             assert parent is not None
     assert len(queries) == 3
+
+
+def test_handler_span_is_current_during_event(_setup):
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    current = otel_trace.get_current_span()
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
+    assert current.get_span_context().span_id == span.context.span_id
+    assert (
+        otel_trace.get_current_span().get_span_context().span_id != span.context.span_id
+    )
+
+
+def test_handler_restores_ambient_query_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    assert get_query_embedding() == [1.0, 0.0]
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    assert get_query_embedding() is None
+
+
+def test_handler_keeps_existing_scores_and_fills_missing(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    nodes = [_node("a", 0.5, embedding=[0.0, 1.0]), _node("b", embedding=[1.0, 0.0])]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    scores = list(
+        _spans(_setup)["llama_index.retrieve"].attributes[CHUNK_RELEVANCE_SCORES]
+    )
+    assert scores == pytest.approx([0.5, 1.0])
+
+
+def test_handler_accepts_dict_values_nodes(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    nodes = {"n1": _node("a", 0.9), "n2": _node("b", 0.8)}.values()
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    assert (
+        _spans(_setup)["llama_index.retrieve"].attributes[RETRIEVAL_CHUNKS_RETURNED]
+        == 2
+    )
+
+
+def test_handler_no_fallback_score_with_multiple_query_embeddings(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="r")
+        h.on_event_end("embedding", {"embeddings": [vec]}, event_id=f"e{i}")
+    h.on_event_end("retrieve", {"nodes": [_node("a", embedding=[1.0, 0.0])]}, "r")
+    assert (
+        CHUNK_RELEVANCE_SCORES not in _spans(_setup)["llama_index.retrieve"].attributes
+    )
+
+
+def test_handler_start_only_exception_and_end_trace(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("exception", {"exception": RuntimeError("x")}, "x", "q")
+    h.end_trace()
+    span = _spans(_setup)["llama_index.query"]
+    assert span.attributes[ERROR_TYPE] == "RuntimeError"
+    assert "llama_index.exception" not in _spans(_setup)
+
+
+def test_handler_records_processing_failure_event(_setup):
+    class Bad:
+        def get_content(self):
+            raise ValueError("bad node")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    nodes = [SimpleNamespace(node=Bad(), score=0.5)]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    span = _spans(_setup)["llama_index.retrieve"]
+    assert [e.name for e in span.events] == ["ragwatch.callback_error"]
+
+
+def test_handler_keeps_agent_chat_response_output(_setup):
+    resp = SimpleNamespace(response="done", response_gen=None, async_response_gen=None)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": resp}, event_id="q")
+    assert _spans(_setup)["llama_index.query"].attributes[OUTPUT_VALUE] == "done"
+
+
+def test_decorator_does_not_drain_streaming_result(_setup):
+    def gen():
+        yield "tok"
+
+    @query_engine("stream-q")
+    def ask(q):
+        return SimpleNamespace(response=None, response_gen=gen())
+
+    result = ask("hi")
+    assert list(result.response_gen) == ["tok"]
+    span = _spans(_setup)["stream-q"]
+    assert OUTPUT_VALUE not in span.attributes
+    assert span.attributes[INPUT_VALUE]
+
+
+def test_decorator_records_plain_output(_setup):
+    @retriever("plain-r")
+    def find(q):
+        return "result"
+
+    find("hi")
+    assert _spans(_setup)["plain-r"].attributes[OUTPUT_VALUE] == "result"
