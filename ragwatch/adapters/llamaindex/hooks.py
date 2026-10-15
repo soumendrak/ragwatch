@@ -386,8 +386,10 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             if ancestor in self._query_embeddings:
                 # Several query embeddings (e.g. multiple custom_embedding_strs)
                 # are aggregated by LlamaIndex; we can't reproduce that, so
-                # don't score against any single one of them.
+                # don't score against any single one of them, here or in
+                # core scoring that reads the ambient context.
                 self._query_embeddings[ancestor] = None
+                clear_query_embedding()
                 return
             embedding = list(embeddings[0])
             self._query_embeddings[ancestor] = embedding

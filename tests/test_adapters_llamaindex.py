@@ -357,6 +357,21 @@ def test_handler_no_fallback_score_with_multiple_query_embeddings(_setup):
     )
 
 
+def test_multiple_query_embeddings_clear_ambient_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="r")
+        h.on_event_end("embedding", {"embeddings": [vec]}, event_id=f"e{i}")
+    # Ambiguous: core scoring inside this retrieval must not use either one.
+    assert get_query_embedding() is None
+    h.on_event_start("embedding", {}, event_id="e2", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[0.5, 0.5]]}, event_id="e2")
+    assert get_query_embedding() is None
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    assert get_query_embedding() is None
+
+
 def test_handler_start_only_exception_and_end_trace(_setup):
     h = RagWatchCallbackHandler()
     h.start_trace("t")
