@@ -860,3 +860,32 @@ def test_structured_pydantic_response_is_scrubbed(_setup, monkeypatch):
         value = span.attributes[OUTPUT_VALUE]
         assert "sk-secret" not in value
         assert "[REDACTED]" in value and "hi" in value
+
+
+def test_decorator_scrubs_pydantic_result_as_structure(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.adapters.llamaindex.decorators import _StreamingSafeIO
+    from ragwatch.core.tracer import get_tracer
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    class Model:  # duck-typed pydantic v2 model
+        def model_dump(self, mode="python"):
+            return {"answer": "hi", "api_key": "sk-secret"}
+
+    class PydanticResponse:
+        def __init__(self, response):
+            self.response = response
+
+        def __str__(self):
+            return '{"answer": "hi", "api_key": "sk-secret"}'
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    s = get_tracer().start_span("x")
+    _StreamingSafeIO().on_end(s, PydanticResponse(Model()))
+    s.end()
+    value = _spans(_setup)["x"].attributes[OUTPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value

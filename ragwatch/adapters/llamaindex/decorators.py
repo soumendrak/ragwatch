@@ -35,12 +35,20 @@ class _StreamingSafeIO:
             track_input(span, args, kwargs)
 
     def on_end(self, span: Any, result: Any, *, context=None) -> None:
-        from ragwatch.adapters.llamaindex.hooks import _io_text, _is_streaming
+        from ragwatch.adapters.llamaindex.hooks import (
+            _io_text,
+            _is_streaming,
+            _structured,
+        )
 
         if not _effective_auto_track_io(True) or _is_streaming(result):
             return
+        # Pydantic models / PydanticResponse are scrubbed as structures so
+        # key-based redaction sees their fields.
+        structured = _structured(result)
+        value = result if structured is None else structured
         # Scrub, serialize and cap at 4 KB (strings included).
-        safe_set_attribute(span, OUTPUT_VALUE, _io_text(result))
+        safe_set_attribute(span, OUTPUT_VALUE, _io_text(value))
 
 
 def _make(kind: SpanKind, doc: str) -> Callable[..., Any]:
