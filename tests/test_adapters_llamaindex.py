@@ -567,3 +567,16 @@ def test_decorator_caps_plain_string_output(_setup):
     s.end()
     value = _spans(_setup)["x"].attributes[OUTPUT_VALUE]
     assert len(value) < 4200
+
+
+def test_start_failure_still_restores_ambient_embedding(_setup):
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    h.on_event_end("query", {}, event_id="q")
+    assert get_query_embedding() is None

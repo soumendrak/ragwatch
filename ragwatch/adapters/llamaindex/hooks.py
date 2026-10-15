@@ -301,6 +301,9 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         # Register before any fallible payload processing so a failure
         # below still leaves the span reachable by on_event_end/end_trace.
         self._events[event_id] = (span, kind, parent_id, "")
+        if kind in _QUERY_ANCESTORS:
+            # Snapshot before fallible work so _finish can always restore it.
+            self._previous_embeddings[event_id] = get_query_embedding()
         safe_set_attribute(
             span, OPENINFERENCE_SPAN_KIND, _SPAN_KINDS.get(kind, SpanKind.CHAIN.value)
         )
@@ -327,8 +330,6 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             )
             set_embedding_attributes(span, model_name=model)
         self._events[event_id] = (span, kind, parent_id, query)
-        if kind in _QUERY_ANCESTORS:
-            self._previous_embeddings[event_id] = get_query_embedding()
 
     def _resolve_parent(self, parent_id: str) -> str:
         """Skip over events that were not traced (e.g. ``llm``)."""
