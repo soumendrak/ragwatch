@@ -54,6 +54,11 @@ response = index.as_query_engine().query("What is RAGWatch?")
 
 ---
 
+Events started outside a `start_trace`/`end_trace` pair are ended only by
+their own end callback. To bound memory if an end never arrives, at most 256
+such events are kept open; beyond that the oldest is ended early and marked
+`ragwatch.callback.evicted=true`.
+
 ## Decorators
 
 For your own functions around LlamaIndex objects:

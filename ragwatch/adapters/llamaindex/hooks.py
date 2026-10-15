@@ -82,6 +82,11 @@ _DEFAULT_SKIPPED = frozenset({"llm"})
 # Events whose single embedding is the query embedding, not an ingestion batch.
 _QUERY_ANCESTORS = frozenset({"query", "retrieve"})
 
+#: Most events started outside ``start_trace`` that may stay open at once.
+#: Events whose end never arrives would otherwise accumulate forever; the
+#: oldest is ended and dropped once the cap is exceeded.
+_MAX_OPEN_EVENTS = 256
+
 
 class _Chunk:
     """Adapt a LlamaIndex node to the ``page_content``/``metadata`` shape."""
@@ -193,7 +198,28 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         except Exception as exc:
             entry = self._events.get(event_id)
             self._isolate("start", exc, entry[0] if entry else None)
+        finally:
+            if owner is None:
+                self._evict_untraced()
         return event_id
+
+    def _evict_untraced(self) -> None:
+        """Keep events started outside start_trace under ``_MAX_OPEN_EVENTS``."""
+        untraced = [e for e in self._events if e not in self._owners]
+        for event_id in untraced[: max(0, len(untraced) - _MAX_OPEN_EVENTS)]:
+            span = self._events.pop(event_id)[0]
+            # Don't restore its embedding or detach its context token: both
+            # would clobber the state of newer, still-running events.
+            self._previous_embeddings.pop(event_id, None)
+            self._query_embeddings.pop(event_id, None)
+            self._tokens.pop(event_id, None)
+            safe_set_attribute(span, "ragwatch.callback.evicted", True)
+            span.end()
+        untraced_skipped = [e for e in self._skipped if e not in self._owners]
+        for event_id in untraced_skipped[
+            : max(0, len(untraced_skipped) - _MAX_OPEN_EVENTS)
+        ]:
+            self._skipped.pop(event_id, None)
 
     def on_event_end(
         self,

@@ -595,3 +595,80 @@ def test_start_failure_still_restores_ambient_embedding(_setup):
     h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
     h.on_event_end("query", {}, event_id="q")
     assert get_query_embedding() is None
+
+
+def test_retrieval_never_scores_against_stale_ambient_embedding(_setup):
+    # K5: no query embedding under this retrieval, but a stale one is ambient.
+    from ragwatch.core.context import clear_query_embedding, set_query_embedding
+
+    set_query_embedding([1.0, 0.0])
+    try:
+        h = RagWatchCallbackHandler()
+        h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+        nodes = [_node("a", embedding=[1.0, 0.0])]
+        h.on_event_end("retrieve", {"nodes": nodes}, "r")
+    finally:
+        clear_query_embedding()
+    attrs = _spans(_setup)["llama_index.retrieve"].attributes
+    assert CHUNK_RELEVANCE_SCORES not in attrs
+
+
+def test_batch_embedding_is_not_taken_as_query_embedding(_setup):
+    # K22: an ingestion-style batch under a retrieval is not the query vector.
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0], [0.0, 1.0]]}, "e")
+    assert get_query_embedding() is None
+    h.on_event_end("retrieve", {"nodes": [_node("a", embedding=[1.0, 0.0])]}, "r")
+    attrs = _spans(_setup)["llama_index.retrieve"].attributes
+    assert CHUNK_RELEVANCE_SCORES not in attrs
+
+
+def test_child_of_skipped_llm_reparents_to_traced_ancestor_not_current(_setup):
+    # K8: the current span is a sibling, so only explicit re-parenting passes.
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("synthesize", {}, event_id="s", parent_id="q")
+    h.on_event_start("llm", {}, event_id="l", parent_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="l")
+    h.on_event_end("templating", {}, event_id="t")
+    h.on_event_end("llm", {}, event_id="l")
+    h.on_event_end("synthesize", {}, event_id="s")
+    h.on_event_end("query", {}, event_id="q")
+    spans = _spans(_setup)
+    child = spans["llama_index.templating"]
+    assert child.parent.span_id == spans["llama_index.query"].context.span_id
+
+
+def test_strict_mode_reraises_callback_errors(_setup, monkeypatch):
+    # K17
+    import ragwatch
+
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    cfg = RAGWatchConfig(service_name="t", strict_mode=True)
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    with pytest.raises(RuntimeError, match="boom"):
+        h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    assert "llama_index.query" in _spans(_setup)
+
+
+def test_unended_events_outside_trace_are_capped(_setup, monkeypatch):
+    from ragwatch.adapters.llamaindex import hooks
+
+    monkeypatch.setattr(hooks, "_MAX_OPEN_EVENTS", 4)
+    h = RagWatchCallbackHandler()
+    for i in range(10):
+        h.on_event_start("chunking", {}, event_id=f"c{i}")
+        h.on_event_start("llm", {}, event_id=f"l{i}")
+    assert len(h._events) <= 4
+    assert len(h._skipped) <= 4
+    # Evicted spans are ended, not leaked; the newest stays open.
+    ended = [s for s in _setup.get_finished_spans() if s.name == "llama_index.chunking"]
+    assert len(ended) == 6
+    assert "c9" in h._events
