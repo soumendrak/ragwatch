@@ -40,7 +40,7 @@ llamaindex = [
     "llama-index-core>=0.12",
 ]
 dev = [
-    "pytest==8.0",
+    "pytest==9.0.3",
     "pytest-asyncio>=0.23.5",
     "ruff==0.6.0",
 ]
@@ -61,7 +61,7 @@ extra-index-url = []
 
 [dependency-groups]
 dev = [
-    "pytest==8.0",
+    "pytest==9.0.3",
     "pytest-asyncio>=0.23.5",
     "ruff==0.6.0",
 ]
