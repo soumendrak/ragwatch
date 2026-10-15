@@ -35,6 +35,7 @@ from ragwatch.instrumentation.semconv import (
     OUTPUT_VALUE,
     RESPONSE_LENGTH,
     RETRIEVAL_CHUNKS_RETURNED,
+    RETRIEVAL_TOP_K,
 )
 
 
@@ -218,7 +219,7 @@ def test_handler_function_call_is_tool_span(_setup):
     span = _spans(_setup)["llama_index.function_call"]
     assert span.attributes[OPENINFERENCE_SPAN_KIND] == "TOOL"
     assert span.attributes["tool.name"] == "search"
-    assert span.attributes[INPUT_VALUE] == "{'q': 1}"
+    assert span.attributes[INPUT_VALUE] == '{"q": 1}'
     assert span.attributes[OUTPUT_VALUE] == "found"
 
 
@@ -360,7 +361,7 @@ def test_handler_start_only_exception_and_end_trace(_setup):
     h = RagWatchCallbackHandler()
     h.on_event_start("query", {"query_str": "q"}, event_id="q")
     h.on_event_start("exception", {"exception": RuntimeError("x")}, "x", "q")
-    h.end_trace()
+    h.end_trace("t", {"root": ["q"], "q": ["x"]})
     span = _spans(_setup)["llama_index.query"]
     assert span.attributes[ERROR_TYPE] == "RuntimeError"
     assert "llama_index.exception" not in _spans(_setup)
@@ -409,3 +410,87 @@ def test_decorator_records_plain_output(_setup):
 
     find("hi")
     assert _spans(_setup)["plain-r"].attributes[OUTPUT_VALUE] == "result"
+
+
+def test_end_trace_only_finalizes_its_own_events(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "a"}, event_id="qa")
+    h.on_event_start("query", {"query_str": "b"}, event_id="qb")
+    h.on_event_start("retrieve", {}, event_id="rb", parent_id="qb")
+    h.end_trace("a", {"root": ["qa"]})
+    names = [s.name for s in _setup.get_finished_spans()]
+    assert names == ["llama_index.query"]
+    h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
+    h.on_event_end("query", {"response": "x"}, event_id="qb")
+    assert len(_setup.get_finished_spans()) == 3
+
+
+def test_streaming_agent_chat_response_is_not_read(_setup):
+    class StreamingAgentChatResponse:
+        def __init__(self):
+            self.response = ""
+            self.response_gen = iter(["tok"])
+
+        def __str__(self):  # would drain the stream
+            return "".join(self.response_gen)
+
+    resp = StreamingAgentChatResponse()
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": resp}, event_id="q")
+    assert list(resp.response_gen) == ["tok"]
+    assert OUTPUT_VALUE not in _spans(_setup)["llama_index.query"].attributes
+
+
+def test_function_call_payload_is_scrubbed(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    payload = {"function_call": {"q": "x", "api_key": "sk-secret"}}
+    h.on_event_start("function_call", payload, event_id="f")
+    h.on_event_end("function_call", {"function_call_response": "ok"}, "f")
+    value = _spans(_setup)["llama_index.function_call"].attributes[INPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value
+
+
+def test_callback_input_is_capped(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "x" * 10_000}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    value = _spans(_setup)["llama_index.query"].attributes[INPUT_VALUE]
+    assert len(value) < 4200
+    assert value.endswith("...[truncated]")
+
+
+def test_agent_step_is_agent_span_and_top_k_recorded(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("agent_step", {}, event_id="a")
+    h.on_event_start("reranking", {"top_k": 3}, event_id="r", parent_id="a")
+    h.on_event_end("reranking", {"nodes": []}, event_id="r")
+    h.on_event_end("agent_step", {}, event_id="a")
+    spans = _spans(_setup)
+    assert (
+        spans["llama_index.agent_step"].attributes[OPENINFERENCE_SPAN_KIND] == "AGENT"
+    )
+    assert spans["llama_index.reranking"].attributes[RETRIEVAL_TOP_K] == 3
+
+
+def test_ignored_end_event_creates_no_span(_setup):
+    h = RagWatchCallbackHandler(event_ends_to_ignore=["templating"])
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="q")
+    h.on_event_start("retrieve", {}, event_id="r", parent_id="t")
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    spans = _spans(_setup)
+    assert "llama_index.templating" not in spans
+    assert (
+        spans["llama_index.retrieve"].parent.span_id
+        == spans["llama_index.query"].context.span_id
+    )

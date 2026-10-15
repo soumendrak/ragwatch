@@ -30,6 +30,11 @@ from ragwatch.core.context import (
     set_query_embedding,
 )
 from ragwatch.instrumentation.decorators import _effective_auto_track_io
+from ragwatch.instrumentation.io_tracker import (
+    _MAX_IO_BYTES,
+    _get_io_policy,
+    _safe_serialize,
+)
 from ragwatch.core.span_kinds import SpanKind
 from ragwatch.core.tracer import get_tracer
 from ragwatch.instrumentation.attributes import safe_set_attribute
@@ -66,6 +71,7 @@ _SPAN_KINDS: Dict[str, str] = {
     "synthesize": SpanKind.CHAIN.value,
     "embedding": SpanKind.EMBEDDING.value,
     "function_call": SpanKind.TOOL.value,
+    "agent_step": SpanKind.AGENT.value,
 }
 # LLM calls are left to OpenLLMetry (see AGENTS.md); spans for them would
 # duplicate the provider spans.  Children of a skipped event are re-parented
@@ -144,6 +150,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
     ) -> None:
         self.event_starts_to_ignore = tuple(event_starts_to_ignore or ())
         self.event_ends_to_ignore = tuple(event_ends_to_ignore or ())
+        self._ignored_ends = frozenset(_value(e) for e in self.event_ends_to_ignore)
         # event_id → (span, event type, parent event_id, query string)
         self._events: Dict[str, Tuple[Span, str, str, str]] = {}
         # skipped event_id → its parent event_id (for re-parenting children)
@@ -218,17 +225,31 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         trace_id: Optional[str] = None,
         trace_map: Optional[Dict[str, List[str]]] = None,
     ) -> None:
-        """End spans whose events never ended (e.g. start-only exceptions)."""
+        """End this trace's spans whose events never ended.
+
+        Only events listed in *trace_map* (LlamaIndex's map of this trace)
+        are finalized, so a concurrent trace sharing the handler keeps
+        its open spans.
+        """
+        if not trace_map:
+            return
+        owned = set(trace_map)
+        for children in trace_map.values():
+            owned.update(children)
         for event_id in reversed(list(self._events)):
-            self._finish(event_id)
-        self._skipped.clear()
+            if event_id in owned:
+                self._finish(event_id)
+        for event_id in owned:
+            self._skipped.pop(event_id, None)
 
     # -- internals -----------------------------------------------------------
 
     def _start(
         self, kind: str, payload: Dict[str, Any], event_id: str, parent_id: str
     ) -> None:
-        if kind in _DEFAULT_SKIPPED:
+        if kind in _DEFAULT_SKIPPED or kind in self._ignored_ends:
+            # No span when its end will never arrive (LlamaIndex suppresses
+            # on_event_end for event_ends_to_ignore); children re-parent.
             self._skipped[event_id] = parent_id
             return
         parent_id = self._resolve_parent(parent_id)
@@ -254,7 +275,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
         query = str(query) if query is not None else ""
         track_io = _effective_auto_track_io(True)
         if query and track_io:
-            safe_set_attribute(span, INPUT_VALUE, query)
+            safe_set_attribute(span, INPUT_VALUE, _io_text(query))
         elif kind == "function_call":
             tool = _payload(payload, "tool")
             name = getattr(tool, "name", None)
@@ -262,7 +283,10 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
                 safe_set_attribute(span, "tool.name", str(name))
             args = _payload(payload, "function_call")
             if args is not None and track_io:
-                safe_set_attribute(span, INPUT_VALUE, str(args))
+                safe_set_attribute(span, INPUT_VALUE, _io_text(args))
+        top_k = _payload(payload, "top_k")
+        if isinstance(top_k, int) and kind in ("retrieve", "reranking"):
+            set_retrieval_attributes(span, top_k=top_k)
         if kind == "embedding":
             serialized = _payload(payload, "serialized") or {}
             model = (
@@ -310,7 +334,7 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             if text is None:
                 return
             if _effective_auto_track_io(True):
-                safe_set_attribute(span, OUTPUT_VALUE, text)
+                safe_set_attribute(span, OUTPUT_VALUE, _io_text(text))
             if kind in ("query", "synthesize"):
                 safe_set_attribute(span, RESPONSE_LENGTH, len(text))
 
@@ -402,13 +426,11 @@ def _materialized_text(output: Any) -> Optional[str]:
         return None
     if isinstance(output, str):
         return output
-    # Already-materialized text wins: AgentChatResponse also exposes
-    # response_gen for optional dummy streaming but has its .response set.
+    if _is_streaming(output):
+        return None
     response = getattr(output, "response", None)
     if isinstance(response, str):
         return response
-    if hasattr(output, "response_gen") or hasattr(output, "async_response_gen"):
-        return None
     content = getattr(output, "content", None)
     if isinstance(content, str):
         return content
@@ -419,6 +441,23 @@ def _is_streaming(output: Any) -> bool:
     """True for a LlamaIndex streaming response whose text is not yet read."""
     if output is None or isinstance(output, str):
         return False
+    # StreamingResponse, AsyncStreamingResponse, StreamingAgentChatResponse.
+    # The last one sets .response to a string while it still streams.
+    if "Streaming" in type(output).__name__:
+        return True
+    # AgentChatResponse exposes response_gen for optional dummy streaming
+    # but already has its text, so a str .response means materialized.
     if isinstance(getattr(output, "response", None), str):
         return False
     return hasattr(output, "response_gen") or hasattr(output, "async_response_gen")
+
+
+def _io_text(value: Any) -> str:
+    """Scrub *value* with the I/O policy and cap it like auto I/O tracking."""
+    policy = _get_io_policy()
+    if policy is not None:
+        value = policy.scrub_io_payload(value)
+    text = value if isinstance(value, str) else _safe_serialize(value)
+    if len(text) > _MAX_IO_BYTES:
+        text = text[:_MAX_IO_BYTES] + "...[truncated]"
+    return text
