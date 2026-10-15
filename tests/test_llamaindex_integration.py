@@ -57,3 +57,27 @@ async def test_async_ingestion_with_small_cap_does_evict(exporter):
         s for s in exporter.get_finished_spans() if s.name == "llama_index.embedding"
     ]
     assert any(s.attributes.get(EVICTED_ATTRIBUTE) for s in spans)
+
+
+def test_real_pydantic_response_output_is_scrubbed(exporter, monkeypatch):
+    import ragwatch
+    from llama_index.core.base.response.schema import PydanticResponse
+    from pydantic import BaseModel
+
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+    from ragwatch.instrumentation.semconv import OUTPUT_VALUE
+
+    class Answer(BaseModel):
+        answer: str
+        api_key: str
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("synthesize", {}, event_id="s")
+    out = PydanticResponse(response=Answer(answer="hi", api_key="sk-secret"))
+    h.on_event_end("synthesize", {"response": out}, event_id="s")
+    (span,) = exporter.get_finished_spans()
+    assert "sk-secret" not in span.attributes[OUTPUT_VALUE]

@@ -452,7 +452,9 @@ class RagWatchCallbackHandler(_HandlerBase):  # type: ignore[misc,valid-type]
             if _effective_auto_track_io(True):
                 # Scrub the raw structure so key-based redaction still sees
                 # nested keys; only plain text/response objects use the text.
-                raw = output if isinstance(output, (dict, list, tuple)) else text
+                raw = _structured(output)
+                if raw is None:
+                    raw = text
                 safe_set_attribute(span, OUTPUT_VALUE, _io_text(raw))
             if kind in ("query", "synthesize"):
                 safe_set_attribute(span, RESPONSE_LENGTH, len(text))
@@ -558,6 +560,25 @@ def _materialized_text(output: Any) -> Optional[str]:
     return str(output)
 
 
+def _structured(output: Any) -> Any:
+    """Structured form of *output* for key-based scrubbing, else ``None``.
+
+    Covers plain containers, Pydantic models, and responses whose
+    ``.response`` is a model (LlamaIndex ``PydanticResponse``), so redaction
+    sees field names instead of an already-serialized JSON string.
+    """
+    if isinstance(output, (dict, list, tuple)):
+        return output
+    for candidate in (output, getattr(output, "response", None)):
+        dump = getattr(candidate, "model_dump", None)
+        if callable(dump) and not isinstance(candidate, type):
+            try:
+                return dump(mode="json")
+            except Exception:
+                return None
+    return None
+
+
 def _is_streaming(output: Any) -> bool:
     """True for a LlamaIndex streaming response whose text is not yet read."""
     if output is None or isinstance(output, str):
@@ -568,7 +589,12 @@ def _is_streaming(output: Any) -> bool:
         return True
     # AgentChatResponse exposes response_gen for optional dummy streaming
     # but already has its text, so a str .response means materialized.
-    if isinstance(getattr(output, "response", None), str):
+    response = getattr(output, "response", None)
+    if isinstance(response, str):
+        return False
+    # PydanticResponse holds a finished model; it forwards unknown attribute
+    # lookups to it, so the response_gen probe below would misfire.
+    if callable(getattr(response, "model_dump", None)):
         return False
     return hasattr(output, "response_gen") or hasattr(output, "async_response_gen")
 

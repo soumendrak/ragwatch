@@ -825,3 +825,38 @@ async def test_late_end_unwinds_event_evicted_by_another_task(_setup):
     a_ok, _ = await asyncio.gather(task_a(), task_b())
     assert a_ok
     assert h._evicted_tokens == {}
+
+
+def test_structured_pydantic_response_is_scrubbed(_setup, monkeypatch):
+    # PydanticResponse.response is a model; redaction must see its fields.
+    import json
+
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    class Model:  # duck-typed pydantic v2 model
+        def model_dump(self, mode="python"):
+            return {"answer": "hi", "api_key": "sk-secret"}
+
+        def __str__(self):
+            return json.dumps(self.model_dump())
+
+    class PydanticResponse:
+        def __init__(self, response):
+            self.response = response
+
+        def __str__(self):
+            return str(self.response)
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    for i, out in enumerate((PydanticResponse(Model()), Model())):
+        h.on_event_start("synthesize", {}, event_id=f"s{i}")
+        h.on_event_end("synthesize", {"response": out}, event_id=f"s{i}")
+    for span in _setup.get_finished_spans():
+        value = span.attributes[OUTPUT_VALUE]
+        assert "sk-secret" not in value
+        assert "[REDACTED]" in value and "hi" in value
