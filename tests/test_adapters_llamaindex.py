@@ -1,0 +1,891 @@
+"""Tests for ragwatch.adapters.llamaindex.
+
+LlamaIndex itself is an optional extra, so the callback handler is driven
+with the same ``on_event_start`` / ``on_event_end`` calls (and payload
+shapes) that LlamaIndex's ``CallbackManager`` makes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+from tests.conftest import InMemorySpanExporter
+
+from ragwatch.adapters.base import FrameworkAdapter
+from ragwatch.adapters.llamaindex import (
+    LlamaIndexAdapter,
+    RagWatchCallbackHandler,
+    chat_engine,
+    ingestion,
+    query_engine,
+    retriever,
+)
+from ragwatch.core.config import RAGWatchConfig
+from ragwatch.core.context import get_query_embedding
+from ragwatch.core.tracer import configure_tracer, reset_tracer_provider
+from ragwatch.instrumentation.semconv import (
+    CHUNK_RELEVANCE_SCORES,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL_NAME,
+    ERROR_TYPE,
+    INPUT_VALUE,
+    OPENINFERENCE_SPAN_KIND,
+    OUTPUT_VALUE,
+    RESPONSE_LENGTH,
+    RETRIEVAL_CHUNKS_RETURNED,
+    RETRIEVAL_TOP_K,
+)
+
+
+@pytest.fixture(autouse=True)
+def _setup():
+    exporter = InMemorySpanExporter()
+    configure_tracer(
+        RAGWatchConfig(service_name="t", exporter=exporter), _force_flush=True
+    )
+    yield exporter
+    reset_tracer_provider()
+
+
+def _node(text, score=None, embedding=None, **meta):
+    inner = SimpleNamespace(
+        get_content=lambda: text,
+        metadata=meta,
+        ref_doc_id="doc-1",
+        embedding=embedding,
+    )
+    return SimpleNamespace(node=inner, score=score)
+
+
+def _spans(exporter):
+    return {s.name: s for s in exporter.get_finished_spans()}
+
+
+# -- adapter ----------------------------------------------------------------
+
+
+def test_adapter_is_framework_adapter():
+    assert isinstance(LlamaIndexAdapter(), FrameworkAdapter)
+    assert LlamaIndexAdapter().name == "llamaindex"
+
+
+def test_adapter_extract_state():
+    adapter = LlamaIndexAdapter()
+    assert adapter.extract_state((), {"q": 1}) == {"q": 1}
+    assert adapter.extract_state(("x", {"a": 1}), {}) == {"a": 1}
+    assert adapter.extract_state(("x",), {}) is None
+
+
+def test_adapter_normalize_response_object():
+    tool = SimpleNamespace(tool_name="search")
+    raw = SimpleNamespace(response="42", sources=[tool])
+    norm = LlamaIndexAdapter().normalize_result(raw, None)
+    assert norm == {
+        "agent_answer": "42",
+        "is_fallback": False,
+        "tool_calls": [{"name": "search"}],
+    }
+
+
+def test_adapter_normalize_completion_and_unknown():
+    adapter = LlamaIndexAdapter()
+    assert adapter.normalize_result(SimpleNamespace(text=""), None) == {
+        "agent_answer": "",
+        "is_fallback": True,
+    }
+    assert adapter.normalize_result(object(), None) is None
+
+
+# -- decorators -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("decorator", "kind"),
+    [
+        (query_engine, "CHAIN"),
+        (retriever, "RETRIEVER"),
+        (chat_engine, "AGENT"),
+        (ingestion, "EMBEDDING"),
+    ],
+)
+def test_decorator_span_kind(_setup, decorator, kind):
+    @decorator("li-step")
+    def step(q):
+        return q
+
+    assert step("hi") == "hi"
+    span = _spans(_setup)["li-step"]
+    assert span.attributes[OPENINFERENCE_SPAN_KIND] == kind
+
+
+async def test_decorator_bare_async(_setup):
+    @query_engine
+    async def ask(q):
+        return q.upper()
+
+    assert await ask("hi") == "HI"
+    assert any("ask" in name for name in _spans(_setup))
+
+
+# -- callback handler -------------------------------------------------------
+
+
+def test_handler_query_retrieve_synthesize(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "what?"}, event_id="q", parent_id="root")
+    h.on_event_start("retrieve", {"query_str": "what?"}, event_id="r", parent_id="q")
+    nodes = [_node("a", 0.9, file_name="a.md"), _node("b", 0.7)]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    h.on_event_start("synthesize", {"query_str": "what?"}, event_id="s", parent_id="q")
+    h.on_event_end("synthesize", {"response": SimpleNamespace(response="yes")}, "s")
+    h.on_event_end("query", {"response": "yes"}, event_id="q")
+
+    spans = _spans(_setup)
+    query, retrieve, synth = (
+        spans["llama_index.query"],
+        spans["llama_index.retrieve"],
+        spans["llama_index.synthesize"],
+    )
+    assert retrieve.parent.span_id == query.context.span_id
+    assert synth.parent.span_id == query.context.span_id
+    assert retrieve.attributes[OPENINFERENCE_SPAN_KIND] == "RETRIEVER"
+    assert retrieve.attributes[INPUT_VALUE] == "what?"
+    assert retrieve.attributes[RETRIEVAL_CHUNKS_RETURNED] == 2
+    assert retrieve.attributes["retrieval.chunk.0.source"] == "a.md"
+    assert list(retrieve.attributes[CHUNK_RELEVANCE_SCORES]) == [0.9, 0.7]
+    assert synth.attributes[OUTPUT_VALUE] == "yes"
+    assert synth.attributes[RESPONSE_LENGTH] == 3
+
+
+def test_handler_empty_retrieval_records_zero(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    span = _spans(_setup)["llama_index.retrieve"]
+    assert span.attributes[RETRIEVAL_CHUNKS_RETURNED] == 0
+
+
+def test_handler_query_embedding_scores_unscored_nodes(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_start("embedding", {"serialized": {"model_name": "m"}}, "e", "r")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    assert get_query_embedding() == [1.0, 0.0]
+    nodes = [_node("a", embedding=[1.0, 0.0]), _node("b", embedding=[0.0, 1.0])]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+
+    spans = _spans(_setup)
+    emb = spans["llama_index.embedding"]
+    assert emb.attributes[OPENINFERENCE_SPAN_KIND] == "EMBEDDING"
+    assert emb.attributes[EMBEDDING_MODEL_NAME] == "m"
+    assert emb.attributes[EMBEDDING_DIMENSIONS] == 2
+    scores = list(spans["llama_index.retrieve"].attributes[CHUNK_RELEVANCE_SCORES])
+    assert scores == pytest.approx([1.0, 0.0])
+
+
+def test_handler_records_exception(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "hi"}, event_id="q")
+    h.on_event_end("query", {"exception": ValueError("boom")}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
+    assert span.attributes[ERROR_TYPE] == "ValueError"
+    assert span.attributes[INPUT_VALUE] == "hi"
+    assert not span.status.is_ok
+
+
+def test_handler_skips_llm_and_reparents_children(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("llm", {"messages": ["hi"]}, event_id="l", parent_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="l")
+    h.on_event_end("templating", {}, event_id="t")
+    h.on_event_end("llm", {"response": "x"}, event_id="l")
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    spans = _spans(_setup)
+    assert "llama_index.llm" not in spans
+    child = spans["llama_index.templating"]
+    assert child.parent.span_id == spans["llama_index.query"].context.span_id
+
+
+def test_handler_function_call_is_tool_span(_setup):
+    h = RagWatchCallbackHandler()
+    tool = SimpleNamespace(name="search")
+    h.on_event_start(
+        "function_call", {"function_call": {"q": 1}, "tool": tool}, event_id="f"
+    )
+    h.on_event_end("function_call", {"function_call_response": "found"}, "f")
+    span = _spans(_setup)["llama_index.function_call"]
+    assert span.attributes[OPENINFERENCE_SPAN_KIND] == "TOOL"
+    assert span.attributes["tool.name"] == "search"
+    assert span.attributes[INPUT_VALUE] == '{"q": 1}'
+    assert span.attributes[OUTPUT_VALUE] == "found"
+
+
+def test_handler_does_not_drain_streaming_response(_setup):
+    def gen():
+        yield "tok"
+
+    stream = SimpleNamespace(response_gen=gen())
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": stream}, event_id="q")
+    assert list(stream.response_gen) == ["tok"]
+    assert OUTPUT_VALUE not in _spans(_setup)["llama_index.query"].attributes
+
+
+def test_handler_respects_global_auto_track_io_off(_setup, monkeypatch):
+    import ragwatch
+
+    cfg = RAGWatchConfig(service_name="t", global_auto_track_io=False)
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "secret"}, event_id="q")
+    h.on_event_end("query", {"response": "answer"}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
+    assert INPUT_VALUE not in span.attributes
+    assert OUTPUT_VALUE not in span.attributes
+    assert span.attributes[RESPONSE_LENGTH] == 6
+
+
+def test_handler_does_not_reuse_previous_query_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "a"}, event_id="r1")
+    h.on_event_start("embedding", {}, event_id="e1", parent_id="r1")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e1")
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r1")
+    # Second retrieval: unscored nodes and no embedding event of its own.
+    h.on_event_start("retrieve", {"query_str": "b"}, event_id="r2")
+    nodes = [_node("x", embedding=[1.0, 0.0])]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r2")
+    spans = [s for s in _setup.get_finished_spans() if s.name.endswith("retrieve")]
+    assert CHUNK_RELEVANCE_SCORES not in spans[-1].attributes
+    assert spans[-1].attributes[RETRIEVAL_CHUNKS_RETURNED] == 1
+
+
+def test_decorators_resolve_llamaindex_adapter():
+    from ragwatch.instrumentation.decorators import _resolve_adapter
+
+    assert isinstance(_resolve_adapter("llamaindex"), LlamaIndexAdapter)
+
+
+def test_handler_unknown_end_is_ignored(_setup):
+    RagWatchCallbackHandler().on_event_end("query", {}, event_id="missing")
+    assert not _setup.get_finished_spans()
+
+
+async def test_handler_concurrent_queries_do_not_share_spans(_setup):
+    h = RagWatchCallbackHandler()
+
+    async def run(i):
+        h.on_event_start("query", {"query_str": f"q{i}"}, event_id=f"q{i}")
+        h.on_event_start("retrieve", {}, event_id=f"r{i}", parent_id=f"q{i}")
+        await asyncio.sleep(0)
+        h.on_event_end("retrieve", {"nodes": []}, event_id=f"r{i}")
+        h.on_event_end("query", {"response": f"a{i}"}, event_id=f"q{i}")
+
+    await asyncio.gather(*(run(i) for i in range(3)))
+    spans = _setup.get_finished_spans()
+    queries = {s.attributes[INPUT_VALUE]: s for s in spans if s.name.endswith("query")}
+    for s in spans:
+        if s.name.endswith("retrieve"):
+            parent = next(
+                q for q in queries.values() if q.context.span_id == s.parent.span_id
+            )
+            assert parent is not None
+    assert len(queries) == 3
+
+
+def test_handler_span_is_current_during_event(_setup):
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    current = otel_trace.get_current_span()
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    span = _spans(_setup)["llama_index.query"]
+    assert current.get_span_context().span_id == span.context.span_id
+    assert (
+        otel_trace.get_current_span().get_span_context().span_id != span.context.span_id
+    )
+
+
+def test_handler_restores_ambient_query_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    assert get_query_embedding() == [1.0, 0.0]
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    assert get_query_embedding() is None
+
+
+def test_handler_keeps_existing_scores_and_fills_missing(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    nodes = [_node("a", 0.5, embedding=[0.0, 1.0]), _node("b", embedding=[1.0, 0.0])]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    scores = list(
+        _spans(_setup)["llama_index.retrieve"].attributes[CHUNK_RELEVANCE_SCORES]
+    )
+    assert scores == pytest.approx([0.5, 1.0])
+
+
+def test_handler_accepts_dict_values_nodes(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    nodes = {"n1": _node("a", 0.9), "n2": _node("b", 0.8)}.values()
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    assert (
+        _spans(_setup)["llama_index.retrieve"].attributes[RETRIEVAL_CHUNKS_RETURNED]
+        == 2
+    )
+
+
+def test_handler_no_fallback_score_with_multiple_query_embeddings(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="r")
+        h.on_event_end("embedding", {"embeddings": [vec]}, event_id=f"e{i}")
+    h.on_event_end("retrieve", {"nodes": [_node("a", embedding=[1.0, 0.0])]}, "r")
+    assert (
+        CHUNK_RELEVANCE_SCORES not in _spans(_setup)["llama_index.retrieve"].attributes
+    )
+
+
+def test_multiple_query_embeddings_clear_ambient_embedding(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="r")
+        h.on_event_end("embedding", {"embeddings": [vec]}, event_id=f"e{i}")
+    # Ambiguous: core scoring inside this retrieval must not use either one.
+    assert get_query_embedding() is None
+    h.on_event_start("embedding", {}, event_id="e2", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[0.5, 0.5]]}, event_id="e2")
+    assert get_query_embedding() is None
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    assert get_query_embedding() is None
+
+
+def test_handler_start_only_exception_and_end_trace(_setup):
+    h = RagWatchCallbackHandler()
+    h.start_trace("t")
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("exception", {"exception": RuntimeError("x")}, "x", "q")
+    h.end_trace("t", {"root": ["q"], "q": ["x"]})
+    span = _spans(_setup)["llama_index.query"]
+    assert span.attributes[ERROR_TYPE] == "RuntimeError"
+    assert "llama_index.exception" not in _spans(_setup)
+
+
+def test_handler_records_processing_failure_event(_setup):
+    class Bad:
+        def get_content(self):
+            raise ValueError("bad node")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    nodes = [SimpleNamespace(node=Bad(), score=0.5)]
+    h.on_event_end("retrieve", {"nodes": nodes}, event_id="r")
+    span = _spans(_setup)["llama_index.retrieve"]
+    assert [e.name for e in span.events] == ["ragwatch.callback_error"]
+
+
+def test_handler_keeps_agent_chat_response_output(_setup):
+    resp = SimpleNamespace(response="done", response_gen=None, async_response_gen=None)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": resp}, event_id="q")
+    assert _spans(_setup)["llama_index.query"].attributes[OUTPUT_VALUE] == "done"
+
+
+def test_decorator_does_not_drain_streaming_result(_setup):
+    def gen():
+        yield "tok"
+
+    @query_engine("stream-q")
+    def ask(q):
+        return SimpleNamespace(response=None, response_gen=gen())
+
+    result = ask("hi")
+    assert list(result.response_gen) == ["tok"]
+    span = _spans(_setup)["stream-q"]
+    assert OUTPUT_VALUE not in span.attributes
+    assert span.attributes[INPUT_VALUE]
+
+
+def test_decorator_records_plain_output(_setup):
+    @retriever("plain-r")
+    def find(q):
+        return "result"
+
+    find("hi")
+    assert _spans(_setup)["plain-r"].attributes[OUTPUT_VALUE] == "result"
+
+
+def test_end_trace_only_finalizes_its_own_events(_setup):
+    import asyncio
+
+    h = RagWatchCallbackHandler()
+    shared_map = {"root": ["qa", "qb"], "qb": ["rb"]}  # manager-level, shared
+    b_started = asyncio.Event()
+    a_done = asyncio.Event()
+
+    async def task_a():
+        h.start_trace("a")
+        h.on_event_start("query", {"query_str": "a"}, event_id="qa")
+        await b_started.wait()
+        h.end_trace("a", shared_map)
+        a_done.set()
+
+    async def task_b():
+        h.start_trace("b")
+        h.on_event_start("query", {"query_str": "b"}, event_id="qb")
+        h.on_event_start("retrieve", {}, event_id="rb", parent_id="qb")
+        b_started.set()
+        await a_done.wait()
+        assert [s.name for s in _setup.get_finished_spans()] == ["llama_index.query"]
+        h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
+        h.on_event_end("query", {"response": "x"}, event_id="qb")
+        h.end_trace("b", shared_map)
+
+    async def main():
+        await asyncio.gather(task_a(), task_b())
+
+    asyncio.run(main())
+    assert len(_setup.get_finished_spans()) == 3
+
+
+def test_function_call_output_is_scrubbed(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    h.on_event_start("function_call", {}, event_id="f")
+    out = {"function_call_response": {"data": {"api_key": "sk-secret"}}}
+    h.on_event_end("function_call", out, "f")
+    value = _spans(_setup)["llama_index.function_call"].attributes[OUTPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value
+
+
+def test_streaming_agent_chat_response_is_not_read(_setup):
+    class StreamingAgentChatResponse:
+        def __init__(self):
+            self.response = ""
+            self.response_gen = iter(["tok"])
+
+        def __str__(self):  # would drain the stream
+            return "".join(self.response_gen)
+
+    resp = StreamingAgentChatResponse()
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_end("query", {"response": resp}, event_id="q")
+    assert list(resp.response_gen) == ["tok"]
+    assert OUTPUT_VALUE not in _spans(_setup)["llama_index.query"].attributes
+
+
+def test_function_call_payload_is_scrubbed(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    payload = {"function_call": {"q": "x", "api_key": "sk-secret"}}
+    h.on_event_start("function_call", payload, event_id="f")
+    h.on_event_end("function_call", {"function_call_response": "ok"}, "f")
+    value = _spans(_setup)["llama_index.function_call"].attributes[INPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value
+
+
+def test_callback_input_is_capped(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "x" * 10_000}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    value = _spans(_setup)["llama_index.query"].attributes[INPUT_VALUE]
+    assert len(value) < 4200
+    assert value.endswith("...[truncated]")
+
+
+def test_agent_step_is_agent_span_and_top_k_recorded(_setup):
+    h = RagWatchCallbackHandler()
+    h.on_event_start("agent_step", {}, event_id="a")
+    h.on_event_start("reranking", {"top_k": 3}, event_id="r", parent_id="a")
+    h.on_event_end("reranking", {"nodes": []}, event_id="r")
+    h.on_event_end("agent_step", {}, event_id="a")
+    spans = _spans(_setup)
+    assert (
+        spans["llama_index.agent_step"].attributes[OPENINFERENCE_SPAN_KIND] == "AGENT"
+    )
+    assert spans["llama_index.reranking"].attributes[RETRIEVAL_TOP_K] == 3
+
+
+def test_ignored_end_event_creates_no_span(_setup):
+    h = RagWatchCallbackHandler(event_ends_to_ignore=["templating"])
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="q")
+    h.on_event_start("retrieve", {}, event_id="r", parent_id="t")
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    h.on_event_end("query", {"response": "a"}, event_id="q")
+    spans = _spans(_setup)
+    assert "llama_index.templating" not in spans
+    assert (
+        spans["llama_index.retrieve"].parent.span_id
+        == spans["llama_index.query"].context.span_id
+    )
+
+
+def test_start_failure_leaves_span_finishable(_setup):
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    assert "llama_index.query" in _spans(_setup)
+
+
+def test_record_nodes_skips_non_recording_span():
+    from opentelemetry.trace import NonRecordingSpan, INVALID_SPAN_CONTEXT
+
+    class Node:
+        def get_content(self):
+            raise AssertionError("must not materialize")
+
+    from ragwatch.adapters.llamaindex.hooks import record_nodes
+
+    record_nodes(NonRecordingSpan(INVALID_SPAN_CONTEXT), [Node()])
+
+
+def test_decorator_caps_plain_string_output(_setup):
+    from ragwatch.adapters.llamaindex.decorators import _StreamingSafeIO
+
+    from ragwatch.core.tracer import get_tracer
+
+    s = get_tracer().start_span("x")
+    _StreamingSafeIO().on_end(s, "y" * 10_000)
+    s.end()
+    value = _spans(_setup)["x"].attributes[OUTPUT_VALUE]
+    assert len(value) < 4200
+
+
+def test_start_failure_still_restores_ambient_embedding(_setup):
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id="e")
+    h.on_event_end("query", {}, event_id="q")
+    assert get_query_embedding() is None
+
+
+def test_retrieval_never_scores_against_stale_ambient_embedding(_setup):
+    # K5: no query embedding under this retrieval, but a stale one is ambient.
+    from ragwatch.core.context import clear_query_embedding, set_query_embedding
+
+    set_query_embedding([1.0, 0.0])
+    try:
+        h = RagWatchCallbackHandler()
+        h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+        nodes = [_node("a", embedding=[1.0, 0.0])]
+        h.on_event_end("retrieve", {"nodes": nodes}, "r")
+    finally:
+        clear_query_embedding()
+    attrs = _spans(_setup)["llama_index.retrieve"].attributes
+    assert CHUNK_RELEVANCE_SCORES not in attrs
+
+
+def test_batch_embedding_is_not_taken_as_query_embedding(_setup):
+    # K22: an ingestion-style batch under a retrieval is not the query vector.
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "x"}, event_id="r")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="r")
+    h.on_event_end("embedding", {"embeddings": [[1.0, 0.0], [0.0, 1.0]]}, "e")
+    assert get_query_embedding() is None
+    h.on_event_end("retrieve", {"nodes": [_node("a", embedding=[1.0, 0.0])]}, "r")
+    attrs = _spans(_setup)["llama_index.retrieve"].attributes
+    assert CHUNK_RELEVANCE_SCORES not in attrs
+
+
+def test_child_of_skipped_llm_reparents_to_traced_ancestor_not_current(_setup):
+    # K8: the current span is a sibling, so only explicit re-parenting passes.
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    h.on_event_start("synthesize", {}, event_id="s", parent_id="q")
+    h.on_event_start("llm", {}, event_id="l", parent_id="q")
+    h.on_event_start("templating", {}, event_id="t", parent_id="l")
+    h.on_event_end("templating", {}, event_id="t")
+    h.on_event_end("llm", {}, event_id="l")
+    h.on_event_end("synthesize", {}, event_id="s")
+    h.on_event_end("query", {}, event_id="q")
+    spans = _spans(_setup)
+    child = spans["llama_index.templating"]
+    assert child.parent.span_id == spans["llama_index.query"].context.span_id
+
+
+def test_strict_mode_reraises_callback_errors(_setup, monkeypatch):
+    # K17
+    import ragwatch
+
+    class BadQuery:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    cfg = RAGWatchConfig(service_name="t", strict_mode=True)
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    with pytest.raises(RuntimeError, match="boom"):
+        h.on_event_start("query", {"query_str": BadQuery()}, event_id="q")
+    h.on_event_end("query", {}, event_id="q")
+    assert "llama_index.query" in _spans(_setup)
+
+
+def _open_untraced(h, n, prefix="c"):
+    for i in range(n):
+        h.on_event_start("chunking", {}, event_id=f"{prefix}{i}")
+
+
+def _evicted(exporter):
+    from ragwatch.adapters.llamaindex.hooks import EVICTED_ATTRIBUTE
+
+    return [
+        s for s in exporter.get_finished_spans() if s.attributes.get(EVICTED_ATTRIBUTE)
+    ]
+
+
+def test_eviction_sets_marker_on_oldest_untraced_span(_setup):
+    # E3
+    h = RagWatchCallbackHandler(max_open_events=4)
+    _open_untraced(h, 10)
+    for i in range(10):
+        h.on_event_start("llm", {}, event_id=f"l{i}")
+    evicted = _evicted(_setup)
+    assert len(evicted) == 6
+    assert all(s.name == "llama_index.chunking" for s in evicted)
+    assert len(h._events) == 4 and "c9" in h._events and "c0" not in h._events
+    assert len(h._skipped) <= 4
+
+
+def test_cap_value_controls_eviction(_setup):
+    # E2
+    h = RagWatchCallbackHandler(max_open_events=8)
+    _open_untraced(h, 10)
+    assert len(_evicted(_setup)) == 2
+    h = RagWatchCallbackHandler()
+    _open_untraced(h, 500, prefix="d")
+    assert len(_evicted(_setup)) == 2  # default cap is far above 500
+    with pytest.raises(ValueError):
+        RagWatchCallbackHandler(max_open_events=0)
+
+
+def test_traced_events_are_never_evicted(_setup):
+    # E5
+    h = RagWatchCallbackHandler(max_open_events=2)
+    h.start_trace("t")
+    _open_untraced(h, 10, prefix="t")
+    assert all(f"t{i}" in h._events for i in range(10))
+    assert _evicted(_setup) == []
+    h.end_trace("t")
+
+
+def test_embedding_event_is_not_made_current(_setup):
+    # Async embedding batches start every event before awaiting any (#7).
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler()
+    h.on_event_start("query", {"query_str": "q"}, event_id="q")
+    query_span = otel_trace.get_current_span()
+    for i in range(3):
+        h.on_event_start("embedding", {}, event_id=f"e{i}", parent_id="q")
+        assert otel_trace.get_current_span() is query_span
+    for i in range(3):
+        h.on_event_end("embedding", {"embeddings": [[1.0, 0.0]]}, event_id=f"e{i}")
+        assert otel_trace.get_current_span() is query_span
+    h.on_event_end("query", {}, event_id="q")
+    spans = _spans(_setup)
+    assert (
+        spans["llama_index.embedding"].parent.span_id
+        == spans["llama_index.query"].context.span_id
+    )
+
+
+def test_eviction_releases_the_event_context_token(_setup):
+    # N9: an evicted event must not keep its token in the live map.
+    h = RagWatchCallbackHandler(max_open_events=2)
+    _open_untraced(h, 3)
+    assert "c0" not in h._events
+    assert "c0" not in h._tokens
+    assert set(h._tokens) == {"c1", "c2"}
+
+
+def test_retrieve_event_is_made_current(_setup):
+    # N11: only embedding leaves are left unattached.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler()
+    h.on_event_start("retrieve", {"query_str": "q"}, event_id="r")
+    assert otel_trace.get_current_span().name == "llama_index.retrieve"
+    h.on_event_end("retrieve", {"nodes": []}, event_id="r")
+    assert otel_trace.get_current_span() is before
+
+
+def test_only_oldest_untraced_skipped_entries_are_pruned(_setup):
+    # N6
+    import contextvars
+
+    h = RagWatchCallbackHandler(max_open_events=2)
+
+    def traced():
+        h.start_trace("t")  # task-local: the outer context stays untraced
+        for i in range(3):
+            h.on_event_start("llm", {}, event_id=f"traced{i}")
+
+    contextvars.copy_context().run(traced)
+    for i in range(4):
+        h.on_event_start("llm", {}, event_id=f"u{i}")
+    assert set(h._skipped) == {"traced0", "traced1", "traced2", "u2", "u3"}
+
+
+def test_evicted_context_is_unwound_once_newer_events_end(_setup):
+    # #11: an evicted span must not stay current after the events above it end.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler(max_open_events=2)
+    h.on_event_start("query", {}, event_id="q")
+    h.on_event_start("retrieve", {}, event_id="r", parent_id="q")
+    h.on_event_start("synthesize", {}, event_id="s", parent_id="q")  # evicts q
+    h.on_event_start("templating", {}, event_id="t", parent_id="q")  # evicts r
+    for event_id, kind in [("t", "templating"), ("s", "synthesize")]:
+        h.on_event_end(kind, {}, event_id=event_id)
+    assert otel_trace.get_current_span() is before
+    h.on_event_end("retrieve", {}, event_id="r")
+    h.on_event_end("query", {}, event_id="q")
+    assert otel_trace.get_current_span() is before
+    assert h._evicted_tokens == {}
+
+
+def test_evicted_span_that_is_current_is_unwound_at_eviction(_setup):
+    # #11: nothing attached above it, so it is detached immediately.
+    from opentelemetry import trace as otel_trace
+
+    before = otel_trace.get_current_span()
+    h = RagWatchCallbackHandler(max_open_events=1)
+    h.on_event_start("query", {}, event_id="q")
+    h.on_event_start("embedding", {}, event_id="e", parent_id="q")  # evicts q
+    assert otel_trace.get_current_span() is before
+    h.on_event_end("embedding", {"embeddings": [[1.0]]}, event_id="e")
+    assert otel_trace.get_current_span() is before
+
+
+async def test_late_end_unwinds_event_evicted_by_another_task(_setup):
+    # #11 item 3: task B evicts task A's attached event; B can't detach A's
+    # token, so A's own (late) end callback must unwind it.
+    import asyncio
+
+    from opentelemetry import trace as otel_trace
+
+    h = RagWatchCallbackHandler(max_open_events=1)
+    a_started, b_started = asyncio.Event(), asyncio.Event()
+
+    async def task_a():
+        before = otel_trace.get_current_span()
+        h.on_event_start("query", {}, event_id="qa")
+        a_started.set()
+        await b_started.wait()
+        assert "qa" not in h._events  # evicted by task B
+        h.on_event_end("query", {}, event_id="qa")
+        return otel_trace.get_current_span() is before
+
+    async def task_b():
+        await a_started.wait()
+        h.on_event_start("retrieve", {}, event_id="rb")  # evicts qa
+        b_started.set()
+        h.on_event_end("retrieve", {"nodes": []}, event_id="rb")
+
+    a_ok, _ = await asyncio.gather(task_a(), task_b())
+    assert a_ok
+    assert h._evicted_tokens == {}
+
+
+def test_structured_pydantic_response_is_scrubbed(_setup, monkeypatch):
+    # PydanticResponse.response is a model; redaction must see its fields.
+    import json
+
+    import ragwatch
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    class Model:  # duck-typed pydantic v2 model
+        def model_dump(self, mode="python"):
+            return {"answer": "hi", "api_key": "sk-secret"}
+
+        def __str__(self):
+            return json.dumps(self.model_dump())
+
+    class PydanticResponse:
+        def __init__(self, response):
+            self.response = response
+
+        def __str__(self):
+            return str(self.response)
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    h = RagWatchCallbackHandler()
+    for i, out in enumerate((PydanticResponse(Model()), Model())):
+        h.on_event_start("synthesize", {}, event_id=f"s{i}")
+        h.on_event_end("synthesize", {"response": out}, event_id=f"s{i}")
+    for span in _setup.get_finished_spans():
+        value = span.attributes[OUTPUT_VALUE]
+        assert "sk-secret" not in value
+        assert "[REDACTED]" in value and "hi" in value
+
+
+def test_decorator_scrubs_pydantic_result_as_structure(_setup, monkeypatch):
+    import ragwatch
+    from ragwatch.adapters.llamaindex.decorators import _StreamingSafeIO
+    from ragwatch.core.tracer import get_tracer
+    from ragwatch.instrumentation.attribute_policy import AttributePolicy
+
+    class Model:  # duck-typed pydantic v2 model
+        def model_dump(self, mode="python"):
+            return {"answer": "hi", "api_key": "sk-secret"}
+
+    class PydanticResponse:
+        def __init__(self, response):
+            self.response = response
+
+        def __str__(self):
+            return '{"answer": "hi", "api_key": "sk-secret"}'
+
+    cfg = RAGWatchConfig(
+        service_name="t", attribute_policy=AttributePolicy(redact_io_keys=["api_key"])
+    )
+    monkeypatch.setattr(ragwatch, "_ACTIVE_CONFIG", cfg)
+    s = get_tracer().start_span("x")
+    _StreamingSafeIO().on_end(s, PydanticResponse(Model()))
+    s.end()
+    value = _spans(_setup)["x"].attributes[OUTPUT_VALUE]
+    assert "sk-secret" not in value
+    assert "[REDACTED]" in value

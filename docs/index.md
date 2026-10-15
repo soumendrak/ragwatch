@@ -13,6 +13,7 @@
 | [Quickstart](quickstart.md) | Installation, configuration, and your first traced RAG pipeline |
 | [LangGraph Integration](langgraph.md) | Instrument LangGraph applications with `@node`, `@workflow`, `@tool` |
 | [CrewAI Integration](crewai.md) | Instrument CrewAI workflows with `@node`, `@endpoint` |
+| [LlamaIndex Integration](llamaindex.md) | `RagWatchCallbackHandler` plus `@query_engine`, `@retriever`, `@chat_engine`, `@ingestion` |
 | [Quality Scores](quality-scores.md) | `chunk_relevance_score`, user feedback, and how scoring works |
 | [Custom Attributes](custom-attributes.md) | `safe_set_attribute`, SpanHooks, and custom TelemetryExtractors |
 | [Telemetry Extraction](telemetry-extraction.md) | Built-in extractors, telemetry helpers, and writing your own |
