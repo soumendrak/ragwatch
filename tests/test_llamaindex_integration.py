@@ -37,7 +37,9 @@ async def _ingest(handler, n_docs=3000):
 async def test_async_ingestion_of_3000_docs_evicts_nothing(exporter):
     nodes = await _ingest(RagWatchCallbackHandler())
     assert len(nodes) == 3000
-    spans = [s for s in exporter.get_finished_spans() if s.name == "llama_index.embedding"]
+    spans = [
+        s for s in exporter.get_finished_spans() if s.name == "llama_index.embedding"
+    ]
     assert len(spans) == 300  # default embed_batch_size is 10
     assert not any(s.attributes.get(EVICTED_ATTRIBUTE) for s in spans)
     assert all(s.attributes.get(EMBEDDING_DIMENSIONS) == 8 for s in spans)
@@ -46,5 +48,7 @@ async def test_async_ingestion_of_3000_docs_evicts_nothing(exporter):
 async def test_async_ingestion_with_small_cap_does_evict(exporter):
     # The batch really opens every event at once; a 256 cap would evict.
     await _ingest(RagWatchCallbackHandler(max_open_events=256))
-    spans = [s for s in exporter.get_finished_spans() if s.name == "llama_index.embedding"]
+    spans = [
+        s for s in exporter.get_finished_spans() if s.name == "llama_index.embedding"
+    ]
     assert any(s.attributes.get(EVICTED_ATTRIBUTE) for s in spans)
