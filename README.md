@@ -436,6 +436,10 @@ uv run pytest tests/test_tracer.py   # Run specific test file
 - opentelemetry-api 1.24.0
 - openinference-semantic-conventions 0.1.9
 
+## Sponsor
+
+If this project helps you, consider [sponsoring my work on GitHub](https://github.com/sponsors/soumendrak). Your support helps fund maintenance, documentation, and continued development.
+
 ## License
 
 MIT
