@@ -182,8 +182,8 @@ All decorators work on both `async def` and `def`.
 | Layer | Choice | Version |
 |-------|--------|---------|
 | Language | Python | 3.11+ |
-| OTel SDK | opentelemetry-sdk | **pinned 1.24.0** |
-| OTel API | opentelemetry-api | **pinned 1.24.0** |
+| OTel SDK | opentelemetry-sdk | **pinned 1.45.2** |
+| OTel API | opentelemetry-api | **pinned 1.45.2** |
 | Packaging | pyproject.toml | — |
 
 ## Key Design Decisions

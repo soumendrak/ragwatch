@@ -432,8 +432,8 @@ uv run pytest tests/test_tracer.py   # Run specific test file
 ## Requirements
 
 - Python 3.11
-- opentelemetry-sdk 1.24.0
-- opentelemetry-api 1.24.0
+- opentelemetry-sdk 1.45.2
+- opentelemetry-api 1.45.2
 - openinference-semantic-conventions 0.1.9
 
 ## Sponsor
