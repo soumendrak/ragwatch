@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langgraph = [
-    "langgraph==0.2.0",
+    "langgraph==1.0.10rc1",
 ]
 crewai = [
     "crewai==0.41.0",
